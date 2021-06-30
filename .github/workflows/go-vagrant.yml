@@ -27,8 +27,7 @@ jobs:
           cd contribution/vagrant
           vagrant up
 
-      - name: Check vagrant status
-        run: vagrant status
-
       - name: ssh into box after boot
-        run: vagrant ssh -c "echo 'hello world!'"
+        run: |
+          cd contribution/vagrant
+          vagrant ssh -c "echo 'hello world!'"
