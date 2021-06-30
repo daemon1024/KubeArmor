@@ -27,7 +27,13 @@ jobs:
           cd contribution/vagrant
           vagrant up
 
-      - name: ssh into box after boot
+      - name: Run Tests
         run: |
           cd contribution/vagrant
-          vagrant ssh -c "echo 'hello world!'"
+          vagrant ssh -c "cd KubeArmor/KubeArmor"
+          vagrant ssh -c "ls"
+          vagrant ssh -c "make clean && make"
+          vagrant ssh -c "kubectl proxy &"
+          vagrant ssh -c "cd ../tests"
+          vagrant ssh -c "./test-scenarios-local.sh"
+          vagrant ssh -c "cat /tmp/kubearmor.test"
