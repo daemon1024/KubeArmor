@@ -19,6 +19,9 @@ jobs:
       - name: Show Vagrant version
         run: vagrant --version
 
+      - name: ssh-keygen
+        run: ssh-keygen -f $HOME/.ssh/id_rsa.pub -q -N ""
+
       - name: Run vagrant up
         run: |
           cd contribution/vagrant
