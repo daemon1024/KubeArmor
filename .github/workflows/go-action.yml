@@ -8,7 +8,7 @@ on:
 
 jobs:
   build:
-    runs-on: ubuntu-18.04
+    runs-on: ubuntu-20.04
     steps:
       - uses: actions/checkout@v2
 
@@ -17,11 +17,31 @@ jobs:
         with:
           go-version: 1.16
 
-      - run: |
-          sudo apt-key adv --keyserver keyserver.ubuntu.com --recv-keys 4052245BD4284CDD
-          echo "deb https://repo.iovisor.org/apt/$(lsb_release -cs) $(lsb_release -cs) main" | sudo tee /etc/apt/sources.list.d/iovisor.list
+      - name: Build bcc
+        run: |
+          set -x
           sudo apt-get update
-          sudo apt-get install bcc-tools libbcc-examples linux-headers-$(uname -r)
+          # Use release 9 of llvm etc. - later versions have an unfixed
+          # bug on Ubuntu:
+          # https://github.com/iovisor/bcc/issues/2915
+          sudo apt-get -y install bison build-essential cmake flex git libelf-dev libfl-dev libedit-dev libllvm9 llvm-9-dev libclang-9-dev python zlib1g-dev
+          pushd /tmp
+          git clone --depth 1 --branch v0.20.0 https://github.com/iovisor/bcc.git
+          mkdir -p bcc/build; cd bcc/build
+          # Symlink /usr/lib/llvm to avoid "Unable to find clang libraries"
+          # The directory appears only to be created when installing the
+          # virtual llvm-dev package.
+          # https://github.com/iovisor/bcc/issues/492
+          sudo ln -s /usr/lib/llvm-9 /usr/local/llvm
+          cmake ..
+          make
+          sudo make install
+          popd
+
+      - name: Print system info
+        run: |
+          cat /etc/os-release
+          uname -a
 
       - name: debug
         run: cd KubeArmor && make build
