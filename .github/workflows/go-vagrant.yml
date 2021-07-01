@@ -31,9 +31,9 @@ jobs:
           cd contribution/vagrant
           vagrant up
 
-      - name: Build
+      - name: Debug
         run: |
           cd contribution/vagrant
-          vagrant ssh -c "uname -r"
-          vagrant ssh -c "which go"
-          vagrant ssh -c "go env"
+          vagrant ssh
+          ls
+          go env
