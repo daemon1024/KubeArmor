@@ -31,9 +31,20 @@ jobs:
           cd contribution/vagrant
           vagrant up
 
-      - name: Debug
+      - name: Build
         run: |
           cd contribution/vagrant
           vagrant ssh
-          ls
-          go env
+          cd
+          cd KubeArmor/KubeArmor
+          make clean && make
+
+      - name: Test
+        run: |
+          cd contribution/vagrant
+          vagrant ssh
+          cd
+          cd KubeArmor/tests
+          kubectl proxy &
+          ./test-scenarios-local.sh
+          cat /tmp/kubearmor.test
