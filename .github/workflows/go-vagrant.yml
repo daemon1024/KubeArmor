@@ -1,10 +1,14 @@
 name: vagrant-up
 
-on: [push]
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
 
 jobs:
   vagrant-up:
-    runs-on: macos-10.15
+    runs-on: macos-latest
 
     steps:
       - uses: actions/checkout@v2
@@ -27,13 +31,15 @@ jobs:
           cd contribution/vagrant
           vagrant up
 
-      - name: Run Tests
+      - name: Build
         run: |
           cd contribution/vagrant
-          vagrant ssh -c "cd KubeArmor/KubeArmor"
-          vagrant ssh -c "ls"
-          vagrant ssh -c "make clean && make"
-          vagrant ssh -c "kubectl proxy &"
-          vagrant ssh -c "cd ../tests"
-          vagrant ssh -c "./test-scenarios-local.sh"
+          vagrant ssh -c "cd KubeArmor/KubeArmor && make clean && make"
+          vagrant ssh -c "cd KubeArmor/tests && ./test-scenarios-local.sh"
+          vagrant ssh -c "cat /tmp/kubearmor.test"
+
+      - name: Test
+        run: |
+          cd contribution/vagrant
+          vagrant ssh -c "cd KubeArmor/tests && ./test-scenarios-local.sh"
           vagrant ssh -c "cat /tmp/kubearmor.test"
