@@ -34,12 +34,6 @@ jobs:
       - name: Build
         run: |
           cd contribution/vagrant
-          vagrant ssh -c "cd KubeArmor/KubeArmor && make clean && make"
-          vagrant ssh -c "cd KubeArmor/tests && ./test-scenarios-local.sh"
-          vagrant ssh -c "cat /tmp/kubearmor.test"
-
-      - name: Test
-        run: |
-          cd contribution/vagrant
-          vagrant ssh -c "cd KubeArmor/tests && ./test-scenarios-local.sh"
-          vagrant ssh -c "cat /tmp/kubearmor.test"
+          vagrant ssh -c "uname -r"
+          vagrant ssh -c "which go"
+          vagrant ssh -c "go env"
