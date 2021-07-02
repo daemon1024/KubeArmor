@@ -27,11 +27,9 @@ jobs:
         run: ssh-keygen -f $HOME/.ssh/id_rsa.pub -q -N ""
 
       - name: Run vagrant up
-        run: |
-          cd contribution/vagrant
-          vagrant up
+        run: VAGRANT_LOG=info vagrant up
+        working-directory: contribution/vagrant
 
       - name: Build & Test
-        run: |
-          cd contribution/vagrant
-          vagrant ssh -c "export GOPATH=\$HOME/go;export PATH=\$PATH:/usr/local/go/bin:\$HOME/go/bin;go env;cd KubeArmor/KubeArmor;make clean;make;cd ..;cd tests;kubectl proxy & ./test-scenarios-local.sh;cat /tmp/kubearmor.test"
+        run: vagrant ssh -c "export GOPATH=\$HOME/go;export PATH=\$PATH:/usr/local/go/bin:\$HOME/go/bin;export KUBECONFIG=\$HOME/.kube/config;cd KubeArmor/KubeArmor;make clean;make;cd ..;cd tests;nohup kubectl proxy & sleep 1;cat nohup.out;./test-scenarios-local.sh;cat /tmp/kubearmor.test"
+        working-directory: contribution/vagrant
