@@ -31,20 +31,7 @@ jobs:
           cd contribution/vagrant
           vagrant up
 
-      - name: Build
+      - name: Build & Test
         run: |
           cd contribution/vagrant
-          vagrant ssh
-          cd
-          cd KubeArmor/KubeArmor
-          make clean && make
-
-      - name: Test
-        run: |
-          cd contribution/vagrant
-          vagrant ssh
-          cd
-          cd KubeArmor/tests
-          kubectl proxy &
-          ./test-scenarios-local.sh
-          cat /tmp/kubearmor.test
+          vagrant ssh -c "export GOPATH=\$HOME/go;export PATH=\$PATH:/usr/local/go/bin:\$HOME/go/bin;go env;cd KubeArmor/KubeArmor;make clean;make;cd ..;cd tests;kubectl proxy & ./test-scenarios-local.sh;cat /tmp/kubearmor.test"
