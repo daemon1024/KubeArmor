@@ -58,6 +58,24 @@ jobs:
       - name: test
         run: cd KubeArmor && make testall
 
+      - name: Coverage Feeder
+        run: |
+          go mod tidy
+          go test -race -covermode=atomic
+        working-directory: KubeArmor/feeder
+
+      - name: Coverage Enforcer
+        run: |
+          go mod tidy
+          go test -race -covermode=atomic
+        working-directory: KubeArmor/enforcer
+
+      - name: Coverage Monitor
+        run: |
+          go mod tidy
+          go test -race -covermode=atomic
+        working-directory: KubeArmor/monitor
+
       - name: Clean modcache
         run: go clean -modcache
 
