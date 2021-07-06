@@ -21,7 +21,7 @@ jobs:
       - name: Check module vendoring
         run: |
           go mod tidy
-          test -z "$(git status --porcelain)" || (echo "please run 'go mod tidy', and submit your changes"; exit 1)
+          test -z "$(git status --porcelain)" || (git diff;git status;echo "please run 'go mod tidy', and submit your changes"; exit 1)
         working-directory: KubeArmor
 
       - name: Build bcc
