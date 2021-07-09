@@ -34,12 +34,6 @@ function start_and_wait_for_kubearmor_initialization() {
         exit 1
     fi
 
-    PROXY=$(ps -ef | grep "kubectl proxy" | wc -l)
-    if [ $PROXY != 2 ]; then
-        echo -e "${RED}[FAIL] Proxy is not running${NC}"
-        kubectl proxy &> /dev/null
-    fi
-
     cd $ARMOR_HOME
 
     echo "Options: -logPath=$ARMOR_LOG $ARMOR_OPTIONS"
