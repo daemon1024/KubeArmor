@@ -1,0 +1,46 @@
+name: ci
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+
+jobs:
+  vagrant:
+    name: vagrant workflows
+    runs-on: macos-latest
+
+    steps:
+      - uses: actions/checkout@v2
+
+      - name: Cache Vagrant boxes
+        uses: actions/cache@v2
+        with:
+          path: ~/.vagrant.d/boxes
+          key: ${{ runner.os }}-vagrant-${{ hashFiles('Vagrantfile') }}
+          restore-keys: |
+            ${{ runner.os }}-vagrant-
+
+      - name: Show Vagrant version
+        run: vagrant --version
+
+      - name: ssh-keygen
+        run: ssh-keygen -f $HOME/.ssh/id_rsa.pub -q -N ""
+
+      - name: Run vagrant up
+        run: vagrant up
+        working-directory: contribution/vagrant
+
+      - name: Build
+        run: vagrant ssh -c "export GOPATH=\$HOME/go;export PATH=\$PATH:/usr/local/go/bin:\$HOME/go/bin;export KUBECONFIG=\$HOME/.kube/config;cd KubeArmor/KubeArmor;make clean;make;"
+        working-directory: contribution/vagrant
+
+      - name: Test
+        run: vagrant ssh -c "export GOPATH=\$HOME/go;export PATH=\$PATH:/usr/local/go/bin:\$HOME/go/bin;export KUBECONFIG=\$HOME/.kube/config;cd KubeArmor/tests;ENV=GITHUB ./test-scenarios-local.sh"
+        working-directory: contribution/vagrant
+
+      - name: Test Summary
+        if: ${{ always() }}
+        run: vagrant ssh -c "cat /tmp/kubearmor.test"
+        working-directory: contribution/vagrant

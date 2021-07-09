@@ -35,7 +35,7 @@ function start_and_wait_for_kubearmor_initialization() {
     fi
 
     PROXY=$(ps -ef | grep "kubectl proxy" | wc -l)
-    if [ $PROXY != 2 ]; then
+    if [ $ENV != "GITHUB" ] && [ $PROXY != 2 ]; then
         echo -e "${RED}[FAIL] Proxy is not running${NC}"
         exit 1
     fi
