@@ -35,7 +35,5 @@ jobs:
         working-directory: contribution/vagrant
 
       - name: Test
-        run: |
-          vagrant ssh -c "export GOPATH=\$HOME/go;export PATH=\$PATH:/usr/local/go/bin:\$HOME/go/bin;export KUBECONFIG=\$HOME/.kube/config;cd KubeArmor/tests;./test-scenarios-local.sh"
+        run: vagrant ssh -c "export GOPATH=\$HOME/go;export PATH=\$PATH:/usr/local/go/bin:\$HOME/go/bin;export KUBECONFIG=\$HOME/.kube/config;cd KubeArmor/tests;./test-scenarios-local.sh;cat /tmp/kubearmor.test"
         working-directory: contribution/vagrant
-        shell: bash
