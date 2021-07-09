@@ -1,0 +1,41 @@
+name: MicroK8s
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    name: A job to install MicroK8s
+    steps:
+      - uses: balchua/microk8s-actions@v0.2.1
+        with:
+          addons: '["dns", "rbac", "storage"]'
+      - name: Test MicroK8s
+        id: myactions
+        run: |
+          kubectl get no
+          kubectl get pods -A
+
+      - uses: actions/checkout@v2
+
+      - name: Generate KubeArmor artifacts
+        run: ./KubeArmor/build/build_kubearmor.sh
+
+      - name: Deploy KubeArmor in microk8s
+        run: kubectl apply -f .
+        working-directory: deployments/microk8s
+
+      - name: Sleep to wait for KubeArmor to initialise
+        run: sleep 30s
+
+      - name: Test MicroK8s again with KubeArmor
+        run: |
+          kubectl get pods -A
+          kubectl describe pods -A
+
+      - name: Test KubeArmor
+        run: ./tests/test-scenarios-in-runtime.sh
