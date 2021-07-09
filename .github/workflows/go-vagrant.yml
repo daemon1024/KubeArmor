@@ -36,7 +36,6 @@ jobs:
 
       - name: Test
         run: |
-          bash -c 'vagrant ssh -c "nohup kubectl proxy & sleep 1;curl 127.0.0.1:8001"'  &> /dev/null
           vagrant ssh -c "export GOPATH=\$HOME/go;export PATH=\$PATH:/usr/local/go/bin:\$HOME/go/bin;export KUBECONFIG=\$HOME/.kube/config;cd KubeArmor/tests;./test-scenarios-local.sh"
         working-directory: contribution/vagrant
         shell: bash
