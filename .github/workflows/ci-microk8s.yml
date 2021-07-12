@@ -8,12 +8,19 @@ on:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
-    name: A job to install MicroK8s
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, ubuntu-18.04]
+    name: KubeArmor MicroK8s ${{ matrix.os }}
     steps:
+      - name: Check kernel version
+        run: uname -r
+        
       - uses: balchua/microk8s-actions@v0.2.1
         with:
           addons: '["dns", "rbac", "storage"]'
+
       - name: Test MicroK8s
         id: myactions
         run: |
