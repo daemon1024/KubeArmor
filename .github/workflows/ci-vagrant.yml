@@ -36,11 +36,14 @@ jobs:
         run: vagrant ssh -c "export GOPATH=\$HOME/go;export PATH=\$PATH:/usr/local/go/bin:\$HOME/go/bin;export KUBECONFIG=\$HOME/.kube/config;cd KubeArmor/KubeArmor;make clean;make;"
         working-directory: contribution/vagrant
 
-      - name: Test
-        run: vagrant ssh -c "export GOPATH=\$HOME/go;export PATH=\$PATH:/usr/local/go/bin:\$HOME/go/bin;export KUBECONFIG=\$HOME/.kube/config;cd KubeArmor/tests;ENV=GITHUB ./test-scenarios-local.sh"
+      - name: Generate KubeArmor artifacts
+        run: vagrant ssh -c "export GOPATH=\$HOME/go;export PATH=\$PATH:/usr/local/go/bin:\$HOME/go/bin;export KUBECONFIG=\$HOME/.kube/config;./KubeArmor/KubeArmor/build/build_kubearmor.sh"
         working-directory: contribution/vagrant
 
-      - name: Test Summary
-        if: ${{ always() }}
-        run: vagrant ssh -c "cat /tmp/kubearmor.test"
+      - name: Deploy KubeArmor in Vagrant Machine
+        run: vagrant ssh -c "export GOPATH=\$HOME/go;export PATH=\$PATH:/usr/local/go/bin:\$HOME/go/bin;export KUBECONFIG=\$HOME/.kube/config;cd KubeArmor/deployments/docker/;kubectl apply -f ."
+        working-directory: contribution/vagrant
+
+      - name: Test KubeArmor in Vagrant Machine
+        run: vagrant ssh -c "export GOPATH=\$HOME/go;export PATH=\$PATH:/usr/local/go/bin:\$HOME/go/bin;export KUBECONFIG=\$HOME/.kube/config;cd KubeArmor/tests;./test-scenarios-in-runtime.sh"
         working-directory: contribution/vagrant
