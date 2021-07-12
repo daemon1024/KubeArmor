@@ -16,7 +16,7 @@ jobs:
     steps:
       - name: Check kernel version
         run: uname -r
-        
+
       - uses: balchua/microk8s-actions@v0.2.1
         with:
           addons: '["dns", "rbac", "storage"]'
@@ -51,3 +51,7 @@ jobs:
 
       - name: Test KubeArmor
         run: ./tests/test-scenarios-in-runtime.sh
+
+      - name: Test Results
+        if: ${{ always() }}
+        run: cat /tmp/kubearmor.test
