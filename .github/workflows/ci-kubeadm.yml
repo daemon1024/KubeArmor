@@ -8,9 +8,15 @@ on:
 
 jobs:
   build:
-    name: KubeAdm setup
-    runs-on: ubuntu-18.04
+    name: KubeAdm Setup ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, ubuntu-18.04, ubuntu-16.04]
     steps:
+      - name: Kernel version
+        run: uname -r
+
       - uses: actions/checkout@v2
 
       - name: Set up Go
