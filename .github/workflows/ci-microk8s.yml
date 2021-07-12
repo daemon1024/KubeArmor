@@ -20,6 +20,11 @@ jobs:
           kubectl get no
           kubectl get pods -A
 
+      - name: Install apparmor and audit
+        run: |
+          sudo apt-get install -y apparmor apparmor-utils auditd
+          sudo systemctl enable auditd && sudo systemctl start auditd
+
       - uses: actions/checkout@v2
 
       - name: Generate KubeArmor artifacts
