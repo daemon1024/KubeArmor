@@ -8,15 +8,19 @@ on:
 
 jobs:
   build:
-    name: go workflows
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        go: ["1.16", "1.15", "1.14", "1.13"]
+    name: go workflows ${{ matrix.go }}
     steps:
       - uses: actions/checkout@v2
 
       - name: Set up Go
         uses: actions/setup-go@v2
         with:
-          go-version: 1.16
+          go-version: ${{ matrix.go }}
 
       - name: Check module vendoring
         run: |
@@ -55,10 +59,17 @@ jobs:
         run: make testall
         working-directory: KubeArmor
 
+      - name: Coverage KubeArmor
+        run: sudo -E env "PATH=$PATH" go test -race -covermode=atomic ./...
+        working-directory: KubeArmor
+
       - name: Clean modcache
+        if: ${{ always() }}
         run: go clean -modcache
+        working-directory: KubeArmor
 
       - name: Lint
+        if: ${{ always() }}
         uses: golangci/golangci-lint-action@v2
         with:
           working-directory: KubeArmor
