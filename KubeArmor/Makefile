@@ -13,6 +13,12 @@ build:
 	cd $(CURDIR); go mod tidy
 	cd $(CURDIR); go build -o kubearmor main.go
 
+.PHONY: build-test
+build-test:
+	$(CURDIR)/patch.sh
+	cd $(CURDIR); go mod tidy
+	cd $(CURDIR); go test -coverprofile=coverage.out -c main.go main_test.go -o kubearmor
+
 .PHONY: run
 run: $(CURDIR)/kubearmor
 	cd $(CURDIR); sudo rm -f /tmp/kubearmor.log

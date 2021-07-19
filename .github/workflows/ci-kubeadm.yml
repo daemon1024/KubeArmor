@@ -47,7 +47,7 @@ jobs:
           popd
 
       - name: Build KubeArmor
-        run: make build
+        run: make build-test
         working-directory: KubeArmor
         env:
           GOPATH: /home/runner/go
@@ -97,4 +97,11 @@ jobs:
 
       - name: Test Results
         if: ${{ always() }}
-        run: cat /tmp/kubearmor.test
+        run: |
+          ls tests
+          ls KubeArmor
+          cat /tmp/kubearmor.test
+          cd KubeArmor
+          go tool cover -func=coverage.out
+        env:
+          GOPATH: /home/runner/go
