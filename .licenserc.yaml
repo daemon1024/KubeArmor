@@ -18,6 +18,8 @@ header:
     - "**/go.sum"
     - "LICENSE"
 
+  comment: on-failure
+
 dependency:
   files:
     - go.mod
