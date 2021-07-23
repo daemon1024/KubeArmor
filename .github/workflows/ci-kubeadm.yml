@@ -98,8 +98,6 @@ jobs:
       - name: Test Results
         if: ${{ always() }}
         run: |
-          ls tests
-          ls KubeArmor
           cat /tmp/kubearmor.test
           cd KubeArmor
           go tool cover -func=coverage.out
