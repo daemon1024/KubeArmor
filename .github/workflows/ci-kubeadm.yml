@@ -97,9 +97,13 @@ jobs:
 
       - name: Test Results
         if: ${{ always() }}
+        run: cat /tmp/kubearmor.test
+
+      - name: Code Coverage
+        if: ${{ always() }}
         run: |
-          cat /tmp/kubearmor.test
-          cd KubeArmor
           go tool cover -func=coverage.out
+          bash <(curl -s https://codecov.io/bash)
+        working-directory: KubeArmor
         env:
           GOPATH: /home/runner/go
