@@ -46,7 +46,12 @@ jobs:
           sudo make install
           popd
 
-      - name: Build KubeArmor
+      - name: Go Test KubeArmor
+        run: ./tests/go-test-kubearmor-local.sh
+        env:
+          GOPATH: /home/runner/go
+
+      - name: Build KubeArmor Test Binary
         run: make build-test
         working-directory: KubeArmor
         env:
@@ -102,8 +107,14 @@ jobs:
       - name: Code Coverage
         if: ${{ always() }}
         run: |
-          go tool cover -func=coverage.out
-          bash <(curl -s https://codecov.io/bash)
+          go get github.com/modocache/gover
+          gover    
+          go tool cover -func=gover.coverprofile
         working-directory: KubeArmor
         env:
           GOPATH: /home/runner/go
+
+      - uses: codecov/codecov-action@v2
+        if: ${{ always() }}
+        with:
+          files: ./KubeArmor/gover.coverprofile
