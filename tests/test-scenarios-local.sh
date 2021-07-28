@@ -445,9 +445,7 @@ fi
 
 echo "[INFO] Remove temporary logs after 10 seconds"
 sleep 10
-cp $ARMOR_LOG $HOME/kubearmor.log
-sudo rm -f $ARMOR_MSG $ARMOR_LOG
-echo "[INFO] Removed the temporary logs"
+echo "[INFO] Didn't remove the temporary logs"
 
 if [ $res_microservice != 0 ]; then
     exit 1

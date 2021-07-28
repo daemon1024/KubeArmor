@@ -101,8 +101,11 @@ jobs:
         if: ${{ always() }}
         uses: actions/upload-artifact@v2
         with:
-          name: kubearmor.log
-          path: kubearmor.log
+          name: kubearmor.logs
+          path: |
+            /tmp/kubearmor.test
+            /tmp/kubearmor.log
+            /tmp/kubearmor.msg
 
       - name: Test Results
         if: ${{ always() }}
