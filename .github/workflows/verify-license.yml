@@ -5,11 +5,6 @@ on:
     branches: [master]
   pull_request:
     branches: [master]
-
-permissions:
-  contents: read
-  issues: write
-  pull-requests: write
   
 jobs:
   build:
@@ -17,6 +12,6 @@ jobs:
     steps:
       - uses: actions/checkout@v2
       - name: Check License Header
-        uses: apache/skywalking-eyes@main
+        uses: apache/skywalking-eyes@9bd5feb86b5817aa6072b008f9866a2c3bbc8587
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
