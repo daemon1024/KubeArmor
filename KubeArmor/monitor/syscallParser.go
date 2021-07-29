@@ -20,7 +20,6 @@ import (
 // ===================== //
 
 const (
-	noneT      uint8 = 0
 	intT       uint8 = 1
 	strT       uint8 = 10
 	strArrT    uint8 = 11
@@ -31,7 +30,6 @@ const (
 	sockTypeT  uint8 = 16
 	capT       uint8 = 17
 	syscallT   uint8 = 18
-	typeMax    uint8 = 255
 )
 
 // ======================= //
@@ -87,12 +85,18 @@ func readUInt32BigendFromBuff(buff io.Reader) (uint32, error) {
 	return res, err
 }
 
+// Min Function
+func Min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
 // readByteSliceFromBuff Function
 func readByteSliceFromBuff(buff io.Reader, len int) ([]byte, error) {
-	var err error
-	res := make([]byte, len)
-	err = binary.Read(buff, binary.LittleEndian, &res)
-	if err != nil {
+	res := make([]byte, Min(len, MAX_STRING_LEN))
+	if err := binary.Read(buff, binary.LittleEndian, &res); err != nil {
 		return nil, fmt.Errorf("error reading byte array: %v", err)
 	}
 	return res, nil

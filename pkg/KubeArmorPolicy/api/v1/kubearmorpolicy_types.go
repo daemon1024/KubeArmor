@@ -258,6 +258,37 @@ type CapabilitiesType struct {
 	Action ActionType `json:"action,omitempty"`
 }
 
+type MatchMountedVolumeType struct {
+	// +kubebuilder:validation:Optional
+	Path MatchPathType `json:"path,omitempty"`
+	// +kubebuilder:validation:Optional
+	Directory MatchDirectoryType `json:"dir,omitempty"`
+	// +kubebuilder:validation:Optional
+	ReadOnly bool `json:"readOnly,omitempty"`
+
+	// +kubebuilder:validation:optional
+	Severity SeverityType `json:"severity,omitempty"`
+	// +kubebuilder:validation:optional
+	Tags []string `json:"tags,omitempty"`
+	// +kubebuilder:validation:optional
+	Message string `json:"message,omitempty"`
+	// +kubebuilder:validation:optional
+	Action ActionType `json:"action,omitempty"`
+}
+
+type SELinuxType struct {
+	MatchMountedVolumes []MatchMountedVolumeType `json:"matchMountedVolumes"`
+
+	// +kubebuilder:validation:optional
+	Severity SeverityType `json:"severity,omitempty"`
+	// +kubebuilder:validation:optional
+	Tags []string `json:"tags,omitempty"`
+	// +kubebuilder:validation:optional
+	Message string `json:"message,omitempty"`
+	// +kubebuilder:validation:optional
+	Action ActionType `json:"action,omitempty"`
+}
+
 // +kubebuilder:validation:Enum=Audit;Allow;Block;AllowWithAudit;BlockWithAudit
 type ActionType string
 
@@ -273,7 +304,8 @@ type KubeArmorPolicySpec struct {
 	Network      NetworkType      `json:"network,omitempty"`
 	Capabilities CapabilitiesType `json:"capabilities,omitempty"`
 
-	AppArmor string `json:"apparmor,omitempty"`
+	AppArmor string      `json:"apparmor,omitempty"`
+	SELinux  SELinuxType `json:"selinux,omitempty"`
 
 	// +kubebuilder:validation:optional
 	Severity SeverityType `json:"severity,omitempty"`
@@ -287,14 +319,14 @@ type KubeArmorPolicySpec struct {
 
 // KubeArmorPolicyStatus defines the observed state of KubeArmorPolicy
 type KubeArmorPolicyStatus struct {
-	// INSERT ADDITIONAL STATUS FIELD - define observed state of cluster
-	// Important: Run "make" to regenerate code after modifying this file
+	PolicyStatus string `json:"status,omitempty"`
 }
 
 // +kubebuilder:object:root=true
 
 // KubeArmorPolicy is the Schema for the kubearmorpolicies API
 // +kubebuilder:resource:shortName=ksp
+// +kubebuilder:subresource:status
 type KubeArmorPolicy struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`

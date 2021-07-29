@@ -24,6 +24,11 @@ type Container struct {
 
 	// == //
 
+	PidNS uint32 `json:"pidns"`
+	MntNS uint32 `json:"mntns"`
+
+	// == //
+
 	PolicyEnabled int `json:"policyEnabled"`
 
 	ProcessVisibilityEnabled      bool `json:"processVisibilityEnabled"`
@@ -86,6 +91,11 @@ type K8sPodEvent struct {
 	Object v1.Pod `json:"object"`
 }
 
+// SecurityPolicyStatus Structure
+type SecurityPolicyStatus struct {
+	PolicyStatus string `json:"status,omitempty"`
+}
+
 // K8sKubeArmorPolicyEvent Structure
 type K8sKubeArmorPolicyEvent struct {
 	Type   string             `json:"type"`
@@ -94,8 +104,9 @@ type K8sKubeArmorPolicyEvent struct {
 
 // K8sKubeArmorPolicy Structure
 type K8sKubeArmorPolicy struct {
-	Metadata metav1.ObjectMeta `json:"metadata"`
-	Spec     SecuritySpec      `json:"spec"`
+	Metadata metav1.ObjectMeta    `json:"metadata"`
+	Spec     SecuritySpec         `json:"spec"`
+	Status   SecurityPolicyStatus `json:"status,omitempty"`
 }
 
 // K8sKubeArmorPolicies Structure
@@ -111,8 +122,9 @@ type K8sKubeArmorHostPolicyEvent struct {
 
 // K8sKubeArmorHostPolicy Structure
 type K8sKubeArmorHostPolicy struct {
-	Metadata metav1.ObjectMeta `json:"metadata"`
-	Spec     HostSecuritySpec  `json:"spec"`
+	Metadata metav1.ObjectMeta    `json:"metadata"`
+	Spec     HostSecuritySpec     `json:"spec"`
+	Status   SecurityPolicyStatus `json:"status,omitempty"`
 }
 
 // K8sKubeArmorPolicies Structure
@@ -377,6 +389,30 @@ type CapabilitiesType struct {
 	Action string `json:"action,omitempty"`
 }
 
+// MatchMountedVolumeType Structure
+type MatchMountedVolumeType struct {
+	Severity int      `json:"severity,omitempty"`
+	Tags     []string `json:"tags,omitempty"`
+	Message  string   `json:"message,omitempty"`
+
+	Path      string `json:"path,omitempty"`
+	Directory string `json:"dir,omitempty"`
+	ReadOnly  bool   `json:"readOnly,omitempty"`
+
+	Action string `json:"action,omitempty"`
+}
+
+// SELinuxType Structure
+type SELinuxType struct {
+	Severity int      `json:"severity,omitempty"`
+	Tags     []string `json:"tags,omitempty"`
+	Message  string   `json:"message,omitempty"`
+
+	MatchMountedVolumes []MatchMountedVolumeType `json:"matchMountedVolumes,omitempty"`
+
+	Action string `json:"action,omitempty"`
+}
+
 // SecuritySpec Structure
 type SecuritySpec struct {
 	Severity int      `json:"severity"`
@@ -390,7 +426,8 @@ type SecuritySpec struct {
 	Network      NetworkType      `json:"network,omitempty"`
 	Capabilities CapabilitiesType `json:"capabilities,omitempty"`
 
-	AppArmor string `json:"apparmor,omitempty"`
+	AppArmor string      `json:"apparmor,omitempty"`
+	SELinux  SELinuxType `json:"selinux,omitempty"`
 
 	Action string `json:"action"`
 }
@@ -449,10 +486,12 @@ type PidNode struct {
 	PidID uint32
 	MntID uint32
 
-	HostPID uint32
-	PPID    uint32
-	PID     uint32
-	UID     uint32
+	HostPPID uint32
+	HostPID  uint32
+
+	PPID uint32
+	PID  uint32
+	UID  uint32
 
 	Comm     string
 	ExecPath string

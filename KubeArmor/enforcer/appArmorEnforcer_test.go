@@ -1,14 +1,31 @@
 package enforcer
 
 import (
+	"io/ioutil"
+	"os"
+	"strings"
 	"testing"
 
 	fd "github.com/kubearmor/KubeArmor/KubeArmor/feeder"
 )
 
 func TestAppArmorEnforcer(t *testing.T) {
+	// Check AppArmor
+	if _, err := os.Stat("/sys/kernel/security/lsm"); err != nil {
+		t.Log("Failed to access /sys/kernel/security/lsm")
+	}
+	lsm, err := ioutil.ReadFile("/sys/kernel/security/lsm")
+	if err != nil {
+		t.Log("Failed to read /sys/kernel/security/lsm")
+		return
+	}
+	if !strings.Contains(string(lsm), "apparmor") {
+		t.Log("AppArmor is not enabled")
+		return
+	}
+
 	// Create Feeder
-	logFeeder := fd.NewFeeder("Default", "32767", "none", false)
+	logFeeder := fd.NewFeeder("Default", "32767", "none", "policy", false)
 	if logFeeder == nil {
 		t.Log("[FAIL] Failed to create Feeder")
 		return
@@ -43,8 +60,22 @@ func TestAppArmorEnforcer(t *testing.T) {
 }
 
 func TestAppArmorProfile(t *testing.T) {
+	// Check AppArmor
+	if _, err := os.Stat("/sys/kernel/security/lsm"); err != nil {
+		t.Log("Failed to access /sys/kernel/security/lsm")
+	}
+	lsm, err := ioutil.ReadFile("/sys/kernel/security/lsm")
+	if err != nil {
+		t.Log("Failed to read /sys/kernel/security/lsm")
+		return
+	}
+	if !strings.Contains(string(lsm), "apparmor") {
+		t.Log("AppArmor is not enabled")
+		return
+	}
+
 	// Create Feeder
-	logFeeder := fd.NewFeeder("Default", "32767", "none", false)
+	logFeeder := fd.NewFeeder("Default", "32767", "none", "policy", false)
 	if logFeeder == nil {
 		t.Log("[FAIL] Failed to create Feeder")
 		return
@@ -97,8 +128,22 @@ func TestAppArmorProfile(t *testing.T) {
 }
 
 func TestHostAppArmorProfile(t *testing.T) {
+	// Check AppArmor
+	if _, err := os.Stat("/sys/kernel/security/lsm"); err != nil {
+		t.Log("Failed to access /sys/kernel/security/lsm")
+	}
+	lsm, err := ioutil.ReadFile("/sys/kernel/security/lsm")
+	if err != nil {
+		t.Log("Failed to read /sys/kernel/security/lsm")
+		return
+	}
+	if !strings.Contains(string(lsm), "apparmor") {
+		t.Log("AppArmor is not enabled")
+		return
+	}
+
 	// Create Feeder
-	logFeeder := fd.NewFeeder("Default", "32767", "none", true)
+	logFeeder := fd.NewFeeder("Default", "32767", "none", "policy", true)
 	if logFeeder == nil {
 		t.Log("[FAIL] Failed to create Feeder")
 		return
