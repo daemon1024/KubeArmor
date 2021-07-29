@@ -7,15 +7,13 @@ header:
       SPDX-License-Identifier: Apache-2.0
 
   paths:
-    - "**"
+    - "**/*.go"
+    - "**/*.sh"
+    - "**/Dockerfile"
+    - "**/Makefile"
 
   paths-ignore:
-    - "**/*.md"
-    - "**/*.yml"
-    - "**/*.yaml"
-    - "**/go.mod"
-    - "**/go.sum"
-    - "LICENSE"
+    - ".travis/*"
 
   comment: on-failure
 
