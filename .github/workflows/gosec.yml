@@ -1,0 +1,17 @@
+name: "Security Scan"
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Check out code into the Go module directory
+      uses: actions/checkout@v2
+    - name: Security Scan
+      uses: daemon1024/gosec@master
+      with:
+        working-directory: KubeArmor
+        args: './...'
