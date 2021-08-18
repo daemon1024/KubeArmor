@@ -3,5 +3,5 @@ cmd: bash -c /bin/ls
 result: failed
 ---
 operation: Process
-condition: ls
+condition: /bin/ls
 action: Block
