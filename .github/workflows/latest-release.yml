@@ -10,9 +10,9 @@ env:
   TEST_TAG: kubearmor/kubearmor:test
 
 jobs:
-  docker:
+  build:
     name: Create KubeArmor Release - 18.04
-    # if: github.repository == 'kubearmor/KubeArmor'
+    if: github.repository == 'kubearmor/KubeArmor'
     runs-on: ubuntu-18.04
     steps:
       - name: Checkout KubeArmor code
