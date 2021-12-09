@@ -1,0 +1,39 @@
+project_name: kubearmor
+
+builds:
+  - binary: kubearmor
+    id: kubearmor
+    goos:
+      - linux
+    goarch:
+      - amd64
+
+nfpms:
+  -
+    id: "kubearmor"
+    builds:
+      - "kubearmor"
+    formats:
+      - deb
+      - rpm
+    replaces:
+      - kubearmor
+    maintainer: "Barun Acharya <barun.acharya@accuknox.com>"
+    description: |
+      Cloud-native Runtime Security Enforcement System
+    vendor: "kubearmor"
+    homepage: "https://kubearmor.com"
+    license: "Apache 2"
+    file_name_template: "{{.ProjectName}}_{{.Version}}_{{.Os}}-{{.Arch}}"
+    contents:
+      - src: ./kubearmor.conf
+        dst: /etc/sysconfig/kubearmor.conf
+        type: config
+      - src: ./kubearmor.service
+        dst: /usr/lib/systemd/system/kubearmor.service
+        type: config
+      - src: /usr/local/bin/kubearmor
+        dst: /usr/sbin/kubearmor
+        type: symlink
+      - src: ./BPF/*
+        dst: /usr/local/bin/BPF/
