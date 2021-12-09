@@ -157,7 +157,9 @@ static __always_inline u32 get_task_ns_ppid(struct task_struct *task)
 {
     unsigned int level = task->real_parent->nsproxy->pid_ns_for_children->level;
 
-#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 19, 0)
+#if RHEL_RELEASE_CODE > 0
+    return task->real_parent->thread_pid->numbers[level].nr;
+#elif LINUX_VERSION_CODE < KERNEL_VERSION(4, 19, 0)
     return task->real_parent->pids[PIDTYPE_PID].pid->numbers[level].nr;
 #else
     return task->real_parent->thread_pid->numbers[level].nr;
@@ -168,7 +170,9 @@ static __always_inline u32 get_task_ns_tgid(struct task_struct *task)
 {
     unsigned int level = task->nsproxy->pid_ns_for_children->level;
 
-#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 19, 0)
+#if RHEL_RELEASE_CODE > 0
+    return task->group_leader->thread_pid->numbers[level].nr;
+#elif LINUX_VERSION_CODE < KERNEL_VERSION(4, 19, 0)
     return task->group_leader->pids[PIDTYPE_PID].pid->numbers[level].nr;
 #else
     return task->group_leader->thread_pid->numbers[level].nr;
@@ -179,7 +183,9 @@ static __always_inline u32 get_task_ns_pid(struct task_struct *task)
 {
     unsigned int level = task->nsproxy->pid_ns_for_children->level;
 
-#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 19, 0)
+#if RHEL_RELEASE_CODE > 0
+    return task->thread_pid->numbers[level].nr;
+#elif LINUX_VERSION_CODE < KERNEL_VERSION(4, 19, 0)
     return task->pids[PIDTYPE_PID].pid->numbers[level].nr;
 #else
     return task->thread_pid->numbers[level].nr;
