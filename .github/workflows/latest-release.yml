@@ -4,7 +4,7 @@ on:
   pull_request:
     # Sequence of patterns matched against refs/tags
     branches:
-      - 'main'
+      - 'github-actions'
 
 env: 
   TEST_TAG: kubearmor/kubearmor:test
@@ -12,7 +12,7 @@ env:
 jobs:
   build:
     name: Create KubeArmor Release - 18.04
-    if: github.repository == 'kubearmor/KubeArmor'
+    # if: github.repository == 'kubearmor/KubeArmor'
     runs-on: ubuntu-18.04
     steps:
       - name: Checkout KubeArmor code
