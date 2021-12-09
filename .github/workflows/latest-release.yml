@@ -3,8 +3,8 @@ on:
   push:
   pull_request:
     # Sequence of patterns matched against refs/tags
-    branches:
-      - 'github-actions'
+    # branches:
+    #   - 'github-actions'
 
 env: 
   TEST_TAG: kubearmor/kubearmor:test
