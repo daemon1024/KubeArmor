@@ -26,10 +26,10 @@ nfpms:
     license: "Apache 2"
     file_name_template: "{{.ProjectName}}_{{.Version}}_{{.Os}}-{{.Arch}}"
     contents:
-      - src: ./kubearmor.conf
+      - src: ./packaging/kubearmor.conf
         dst: /etc/sysconfig/kubearmor.conf
         type: config
-      - src: ./kubearmor.service
+      - src: ./packaging/kubearmor.service
         dst: /usr/lib/systemd/system/kubearmor.service
         type: config
       - src: /usr/local/bin/kubearmor
@@ -37,3 +37,5 @@ nfpms:
         type: symlink
       - src: ./BPF/*
         dst: /usr/local/bin/BPF/
+    scripts:
+      postinstall: packaging/postinstall.sh

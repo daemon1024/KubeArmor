@@ -5,7 +5,7 @@ Description=KubeArmor
 User=root
 KillMode=process
 EnvironmentFile=/etc/sysconfig/kubearmor.conf
-ExecStart=/usr/local/bin/kubearmor -logPath=/tmp/kubearmor.log -enableKubeArmorHostPolicy
+ExecStart=/usr/local/bin/kubearmor -logPath=/tmp/kubearmor.log -enableKubeArmorHostPolicy=$ENABLE_HOST_POLICY
 
 [Install]
 WantedBy=multi-user.target
