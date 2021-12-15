@@ -1,7 +1,6 @@
 name: Test KubeArmor image before pushing
 on:
   push:
-  pull_request:
     # Sequence of patterns matched against refs/tags
     # branches:
     #   - 'github-actions'
