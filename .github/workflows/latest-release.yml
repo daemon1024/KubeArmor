@@ -69,11 +69,7 @@ jobs:
 
           #kubectl wait --for=condition=Ready pods --all --all-namespaces
           #kubectl wait deploy/kubearmor --for=condition=available 
-
-      - name: Wait for 60 sec for KubeArmor to start 
-        uses: juliangruber/sleep-action@v1
-        with:
-          time: 60s      
+          sleep 20
 
       - name: Run KubeArmor tests
         run: |
