@@ -59,9 +59,17 @@ jobs:
           # disable master isolation
           kubectl taint nodes --all node-role.kubernetes.io/master-
             
-      - name: Run KubeArmor tests
+      - name: Run KubeArmor 
         run: |
           kubectl apply -f KubeArmor/build/kubearmor-test-docker.yaml
+
+      - name: Wait for 120 sec for KubeArmor to start 
+        uses: juliangruber/sleep-action@v1
+        with:
+          time: 120s      
+
+      - name: Run KubeArmor tests
+        run: |
           ./tests/test-scenarios-in-runtime.sh ${{ env.TEST_TAG}}
 
       - name: Archive log artifacts
