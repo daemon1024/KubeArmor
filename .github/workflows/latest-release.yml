@@ -22,7 +22,7 @@ jobs:
 
       - name: Setup Enviroment
         run: |
-          ./contribution/microk8s
+          ./contribution/microk8s/install_k3s.sh
           # # install kernel-headers
           # sudo apt-get update
           # sudo apt-get install -y linux-headers-$(uname -r)
@@ -70,10 +70,10 @@ jobs:
           #kubectl wait --for=condition=Ready pods --all --all-namespaces
           #kubectl wait deploy/kubearmor --for=condition=available 
 
-      # - name: Wait for 60 sec for KubeArmor to start 
-      #   uses: juliangruber/sleep-action@v1
-      #   with:
-      #     time: 60s      
+      - name: Wait for 60 sec for KubeArmor to start 
+        uses: juliangruber/sleep-action@v1
+        with:
+          time: 60s      
 
       - name: Run KubeArmor tests
         run: |
