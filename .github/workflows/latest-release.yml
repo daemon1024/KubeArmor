@@ -64,8 +64,10 @@ jobs:
           kubectl apply -f KubeArmor/build/kubearmor-test-docker.yaml
           kubectl get pods --all-namespaces 
           # kubectl rollout status
-          kubectl wait --for=condition=Ready pods --all --all-namespaces
-          kubectl wait deploy/kubearmor --for=condition=available 
+          while [[ $(kubectl get pods -l kubearmor-app=kubearmor -o 'jsonpath={..status.conditions[?(@.type=="Ready")].status}') != "True" ]]; do echo "waiting for pod" && sleep 1; done
+
+          #kubectl wait --for=condition=Ready pods --all --all-namespaces
+          #kubectl wait deploy/kubearmor --for=condition=available 
 
       - name: Wait for 60 sec for KubeArmor to start 
         uses: juliangruber/sleep-action@v1
