@@ -63,7 +63,7 @@ jobs:
         run: |
           kubectl apply -f KubeArmor/build/kubearmor-test-docker.yaml
           kubectl get pods --all-namespaces 
-          kubectl rollout status
+          # kubectl rollout status
           kubectl wait --for=condition=Ready pods --all --all-namespaces
           kubectl wait deploy/kubearmor --for=condition=available 
 
