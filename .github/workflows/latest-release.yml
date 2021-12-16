@@ -62,14 +62,14 @@ jobs:
       - name: Run KubeArmor 
         run: |
           kubectl apply -f KubeArmor/build/kubearmor-test-docker.yaml
-          kubectl get pods
+          kubectl get pods --all-namespaces 
           # kubectl rollout status deployment kubearmor
-          # kubectl wait --for=condition=ready pod -l app=kubearmor
+          # kubectl wait --for=condition=ready pod -l app=daemonset.apps/kubearmor
 
-      - name: Wait for 30 sec for KubeArmor to start 
-        uses: juliangruber/sleep-action@v1
-        with:
-          time: 30s      
+      # - name: Wait for 30 sec for KubeArmor to start 
+      #   uses: juliangruber/sleep-action@v1
+      #   with:
+      #     time: 30s      
 
       - name: Run KubeArmor tests
         run: |
