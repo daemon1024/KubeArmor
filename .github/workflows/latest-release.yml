@@ -64,7 +64,7 @@ jobs:
           kubectl apply -f KubeArmor/build/kubearmor-test-docker.yaml
           kubectl get pods --all-namespaces 
           # kubectl rollout status
-          while [[ $(kubectl get pods -l kubearmor-app=kubearmor -o 'jsonpath={..status.conditions[?(@.type=="Ready")].status}') != "True" ]]; do echo "waiting for pod" && sleep 1; done
+          while [[ $(kubectl get pods -l kubearmor-app=kubearmor -n kube-system -o 'jsonpath={..status.conditions[?(@.type=="Ready")].status}') != "True" ]]; do echo "waiting for pod" && sleep 1; done
 
           #kubectl wait --for=condition=Ready pods --all --all-namespaces
           #kubectl wait deploy/kubearmor --for=condition=available 
