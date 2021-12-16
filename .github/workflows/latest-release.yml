@@ -22,7 +22,7 @@ jobs:
 
       - name: Setup Enviroment
         run: |
-          ./contribution/microk8s/install_k3s.sh
+          ./contribution/k3s/install_k3s.sh
           # # install kernel-headers
           # sudo apt-get update
           # sudo apt-get install -y linux-headers-$(uname -r)
