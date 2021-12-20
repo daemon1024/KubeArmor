@@ -3,8 +3,14 @@ name: ci-test
 on:
   push:
     branches: [main]
+    paths: 
+    - 'KubeArmor/**'
+    - 'tests/**'
   pull_request:
     branches: [main]
+    paths: 
+    - 'KubeArmor/**'
+    - 'tests/**'
 
 jobs:
   build:
