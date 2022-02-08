@@ -29,6 +29,10 @@ type KubearmorConfig struct {
 	KVMAgent   bool // Enable/Disable KVM Agent
 	K8sEnv     bool // Is k8s env ?
 
+	DefaultFilePosture         string // Default Enforcement Action in Global File Context
+	DefaultNetworkPosture      string // Default Enforcement Action in Global Network Context
+	DefaultCapabilitiesPosture string // Default Enforcement Action in Global Capabilities Context
+
 	CoverageTest bool // Enable/Disable Coverage Test
 }
 
@@ -65,6 +69,15 @@ const ConfigKubearmorHostPolicy string = "enableKubeArmorHostPolicy"
 // ConfigKubearmorVM Kubearmor VM key
 const ConfigKubearmorVM string = "enableKubeArmorVm"
 
+// ConfigDefaultFilePosture KubeArmor Default Global File Posture key
+const ConfigDefaultFilePosture string = "defaultFilePosture"
+
+// ConfigDefaultNetworkPosture KubeArmor Default Global Network Posture key
+const ConfigDefaultNetworkPosture string = "defaultNetworkPosture"
+
+// ConfigDefaultCapabilitiesPosture KubeArmor Default Global Capabilities Posture key
+const ConfigDefaultCapabilitiesPosture string = "defaultCapabilitiesPosture"
+
 // ConfigCoverageTest Coverage Test key
 const ConfigCoverageTest string = "coverageTest"
 
@@ -88,6 +101,10 @@ func readCmdLineParams() {
 	kvmAgentB := flag.Bool(ConfigKubearmorVM, false, "enabling KubeArmorVM")
 	k8sEnvB := flag.Bool(ConfigK8sEnv, true, "is k8s env?")
 
+	defaultFilePosture := flag.String(ConfigDefaultFilePosture, "block", "configuring default enforcement action in global file context [audit,block]")
+	defaultNetworkPosture := flag.String(ConfigDefaultNetworkPosture, "block", "configuring default enforcement action in global network context [audit,block]")
+	defaultCapabilitiesPosture := flag.String(ConfigDefaultCapabilitiesPosture, "block", "configuring default enforcement action in global capability context [audit,block]")
+
 	coverageTestB := flag.Bool(ConfigCoverageTest, false, "enabling CoverageTest")
 
 	flag.Parse()
@@ -106,6 +123,10 @@ func readCmdLineParams() {
 	viper.Set(ConfigKubearmorHostPolicy, *hostPolicyB)
 	viper.Set(ConfigKubearmorVM, *kvmAgentB)
 	viper.Set(ConfigK8sEnv, *k8sEnvB)
+
+	viper.Set(ConfigDefaultFilePosture, *defaultFilePosture)
+	viper.Set(ConfigDefaultNetworkPosture, *defaultNetworkPosture)
+	viper.Set(ConfigDefaultCapabilitiesPosture, *defaultCapabilitiesPosture)
 
 	viper.Set(ConfigCoverageTest, *coverageTestB)
 }
@@ -151,6 +172,10 @@ func LoadConfig() error {
 		GlobalCfg.HostPolicy = true
 	}
 	GlobalCfg.K8sEnv = viper.GetBool(ConfigK8sEnv)
+
+	GlobalCfg.DefaultFilePosture = viper.GetString(ConfigDefaultFilePosture)
+	GlobalCfg.DefaultNetworkPosture = viper.GetString(ConfigDefaultNetworkPosture)
+	GlobalCfg.DefaultCapabilitiesPosture = viper.GetString(ConfigDefaultCapabilitiesPosture)
 
 	if GlobalCfg.HostVisibility == "" {
 		if GlobalCfg.KVMAgent || GlobalCfg.HostPolicy {
