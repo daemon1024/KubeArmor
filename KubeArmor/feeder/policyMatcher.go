@@ -874,7 +874,7 @@ func (fd *Feeder) UpdateMatchedPolicy(log tp.Log) tp.Log {
 					}
 
 					if !matched {
-						if secPolicy.IsFromSource && secPolicy.Action == "Allow" {
+						if secPolicy.Action == "Allow" {
 							considerFilePosture = true
 						}
 					}
@@ -900,7 +900,7 @@ func (fd *Feeder) UpdateMatchedPolicy(log tp.Log) tp.Log {
 							continue
 						}
 					}
-					if secPolicy.IsFromSource && secPolicy.Action == "Allow" {
+					if secPolicy.Action == "Allow" {
 						considerNetworkPosture = true
 					}
 				}
@@ -1051,7 +1051,7 @@ func (fd *Feeder) UpdateMatchedPolicy(log tp.Log) tp.Log {
 					return log
 				}
 			} else if log.Operation == "Capabilities" {
-				if setLogFields(cfg.GlobalCfg.DefaultCapabilitiesPosture, log.CapabilitiesVisibilityEnabled, &log, true) {
+				if setLogFields(cfg.GlobalCfg.DefaultCapabilitiesPosture, log.CapabilitiesVisibilityEnabled, &log, false) {
 					return log
 				}
 			}
