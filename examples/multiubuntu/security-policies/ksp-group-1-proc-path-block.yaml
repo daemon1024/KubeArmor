@@ -6,9 +6,6 @@ metadata:
 spec:
   severity: 5
   message: "block the sleep command"
-  selector:
-    matchLabels:
-      group: group-1
   process:
     matchPaths:
     - path: /bin/sleep # try sleep 1 (permission denied)
