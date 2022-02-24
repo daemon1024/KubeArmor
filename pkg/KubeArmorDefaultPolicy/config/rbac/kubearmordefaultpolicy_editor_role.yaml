@@ -1,0 +1,24 @@
+# permissions for end users to edit kubearmordefaultpolicies.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: kubearmordefaultpolicy-editor-role
+rules:
+- apiGroups:
+  - security.kubearmor.com
+  resources:
+  - kubearmordefaultpolicies
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - security.kubearmor.com
+  resources:
+  - kubearmordefaultpolicies/status
+  verbs:
+  - get

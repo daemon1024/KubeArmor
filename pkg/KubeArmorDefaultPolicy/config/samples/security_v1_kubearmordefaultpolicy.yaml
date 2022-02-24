@@ -1,0 +1,7 @@
+apiVersion: security.kubearmor.com/v1
+kind: KubeArmorDefaultPolicy
+metadata:
+  name: kubearmordefaultpolicy-sample
+spec:
+  file: Audit
+  network: Block
