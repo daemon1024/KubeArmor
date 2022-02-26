@@ -61,6 +61,8 @@ type EndPoint struct {
 
 	PolicyEnabled int `json:"policyEnabled"`
 
+	DefaultPosture DefaultPosture `json:"defaultPosture"`
+
 	ProcessVisibilityEnabled      bool `json:"processVisibilityEnabled"`
 	FileVisibilityEnabled         bool `json:"fileVisibilityEnabled"`
 	NetworkVisibilityEnabled      bool `json:"networkVisibilityEnabled"`
@@ -464,6 +466,25 @@ type HostSecuritySpec struct {
 type HostSecurityPolicy struct {
 	Metadata map[string]string `json:"metadata"`
 	Spec     HostSecuritySpec  `json:"spec"`
+}
+
+// DefaultPosture Structure
+type DefaultPosture struct {
+	FileAction         string `json:"file,omitempty"`
+	NetworkAction      string `json:"network,omitempty"`
+	CapabilitiesAction string `json:"capabilties,omitempty"`
+}
+
+// K8sDefaultPolicy Structure
+type K8sDefaultPolicy struct {
+	Metadata metav1.ObjectMeta `json:"metadata"`
+	Spec     DefaultPosture    `json:"spec"`
+}
+
+// K8sDefaultPolicyEvent Structure
+type K8sDefaultPolicyEvent struct {
+	Type   string           `json:"type"`
+	Object K8sDefaultPolicy `json:"object"`
 }
 
 // ================== //

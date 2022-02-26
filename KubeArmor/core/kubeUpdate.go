@@ -216,6 +216,20 @@ func (dm *KubeArmorDaemon) UpdateEndPointWithPod(action string, pod tp.K8sPod) {
 		}
 		dm.ContainersLock.Unlock()
 
+		dm.DefaultPosturesLock.Lock()
+		if val, ok := dm.DefaultPostures[newPoint.NamespaceName]; ok {
+			newPoint.DefaultPosture = val
+		} else {
+			globalDefaultPosture := tp.DefaultPosture{
+				FileAction:         cfg.GlobalCfg.DefaultFilePosture,
+				NetworkAction:      cfg.GlobalCfg.DefaultNetworkPosture,
+				CapabilitiesAction: cfg.GlobalCfg.DefaultCapabilitiesPosture,
+			}
+			dm.DefaultPostures[newPoint.NamespaceName] = globalDefaultPosture
+			newPoint.DefaultPosture = globalDefaultPosture
+		}
+		dm.DefaultPosturesLock.Unlock()
+
 		// update selinux profile names to the endpoint
 		for k, v := range pod.Annotations {
 			if strings.HasPrefix(k, "kubearmor-selinux") {
@@ -327,6 +341,20 @@ func (dm *KubeArmorDaemon) UpdateEndPointWithPod(action string, pod tp.K8sPod) {
 			dm.Containers[containerID] = container
 		}
 		dm.ContainersLock.Unlock()
+
+		dm.DefaultPosturesLock.Lock()
+		if val, ok := dm.DefaultPostures[newEndPoint.NamespaceName]; ok {
+			newEndPoint.DefaultPosture = val
+		} else {
+			globalDefaultPosture := tp.DefaultPosture{
+				FileAction:         cfg.GlobalCfg.DefaultFilePosture,
+				NetworkAction:      cfg.GlobalCfg.DefaultNetworkPosture,
+				CapabilitiesAction: cfg.GlobalCfg.DefaultCapabilitiesPosture,
+			}
+			dm.DefaultPostures[newEndPoint.NamespaceName] = globalDefaultPosture
+			newEndPoint.DefaultPosture = globalDefaultPosture
+		}
+		dm.DefaultPosturesLock.Unlock()
 
 		// update selinux profile names to the endpoint
 		for k, v := range pod.Annotations {
@@ -769,6 +797,47 @@ func (dm *KubeArmorDaemon) UpdateSecurityPolicy(action string, secPolicy tp.Secu
 				// update security policies
 				dm.Logger.UpdateSecurityPolicies("UPDATED", dm.EndPoints[idx])
 
+				if dm.RuntimeEnforcer != nil {
+					if dm.EndPoints[idx].PolicyEnabled == tp.KubeArmorPolicyEnabled {
+						// enforce security policies
+						dm.RuntimeEnforcer.UpdateSecurityPolicies(dm.EndPoints[idx])
+					}
+				}
+			}
+		}
+	}
+}
+
+// UpdateDefaultPosture Function
+func (dm *KubeArmorDaemon) UpdateDefaultPosture(action string, secPolicy tp.K8sDefaultPolicy) {
+	dm.EndPointsLock.Lock()
+	defer dm.EndPointsLock.Unlock()
+
+	dm.DefaultPosturesLock.Lock()
+	defer dm.DefaultPosturesLock.Unlock()
+
+	dm.Logger.UpdateDefaultPosture(action, secPolicy)
+
+	globalDefaultPosture := tp.DefaultPosture{
+		FileAction:         cfg.GlobalCfg.DefaultFilePosture,
+		NetworkAction:      cfg.GlobalCfg.DefaultNetworkPosture,
+		CapabilitiesAction: cfg.GlobalCfg.DefaultCapabilitiesPosture,
+	}
+
+	for idx, endPoint := range dm.EndPoints {
+		// update a security policy
+		if secPolicy.Metadata.Namespace == endPoint.NamespaceName {
+			if action == "ADDED" || action == "MODIFIED" {
+				dm.DefaultPostures[secPolicy.Metadata.Namespace] = secPolicy.Spec
+				dm.EndPoints[idx].DefaultPosture = secPolicy.Spec
+			} else if action == "DELETED" {
+				dm.DefaultPostures[secPolicy.Metadata.Namespace] = globalDefaultPosture
+				dm.EndPoints[idx].DefaultPosture = globalDefaultPosture
+			}
+			dm.Logger.Printf("Updating default posture for %s with %v/%v", endPoint.EndPointName, dm.EndPoints[idx].DefaultPosture, dm.DefaultPostures[secPolicy.Metadata.Namespace])
+
+			if cfg.GlobalCfg.Policy {
+				// update security policies
 				if dm.RuntimeEnforcer != nil {
 					if dm.EndPoints[idx].PolicyEnabled == tp.KubeArmorPolicyEnabled {
 						// enforce security policies
@@ -1613,6 +1682,79 @@ func (dm *KubeArmorDaemon) WatchHostSecurityPolicies() {
 				}
 
 				dm.ParseAndUpdateHostSecurityPolicy(event)
+			}
+		}
+	}
+}
+
+// WatchSeccompPolicies Function
+func (dm *KubeArmorDaemon) WatchDefaultPosture() {
+	for {
+		if !K8s.CheckCustomResourceDefinition("kubearmordefaultpolicies") {
+			time.Sleep(time.Second * 1)
+			continue
+		}
+
+		if resp := K8s.WatchK8sDefaultPosture(); resp != nil {
+			defer resp.Body.Close()
+
+			decoder := json.NewDecoder(resp.Body)
+			for {
+				event := tp.K8sDefaultPolicyEvent{}
+				if err := decoder.Decode(&event); err == io.EOF {
+					break
+				} else if err != nil {
+					break
+				}
+
+				if event.Type != "ADDED" && event.Type != "MODIFIED" && event.Type != "DELETED" {
+					continue
+				}
+
+				defaultPosture := tp.K8sDefaultPolicy{}
+
+				if err := kl.Clone(event.Object.Metadata, &defaultPosture.Metadata); err != nil {
+					dm.Logger.Err("Failed to clone a metadata")
+					continue
+				}
+
+				if err := kl.Clone(event.Object.Spec, &defaultPosture.Spec); err != nil {
+					dm.Logger.Err("Failed to clone a spec")
+					continue
+				}
+
+				switch defaultPosture.Spec.FileAction {
+				case "Audit":
+					defaultPosture.Spec.FileAction = "audit"
+				case "Block":
+					defaultPosture.Spec.FileAction = "block"
+				case "":
+					defaultPosture.Spec.FileAction = cfg.GlobalCfg.DefaultFilePosture // by default
+				}
+
+				switch defaultPosture.Spec.NetworkAction {
+				case "Audit":
+					defaultPosture.Spec.NetworkAction = "audit"
+				case "Block":
+					defaultPosture.Spec.NetworkAction = "block"
+				case "":
+					defaultPosture.Spec.NetworkAction = cfg.GlobalCfg.DefaultNetworkPosture // by default
+				}
+
+				switch defaultPosture.Spec.CapabilitiesAction {
+				case "Audit":
+					defaultPosture.Spec.CapabilitiesAction = "audit"
+				case "Block":
+					defaultPosture.Spec.CapabilitiesAction = "block"
+				case "":
+					defaultPosture.Spec.CapabilitiesAction = cfg.GlobalCfg.DefaultCapabilitiesPosture // by default
+				}
+
+				dm.Logger.Printf("Detected a Default Posture Policy (%s/%s/%v)",
+					event.Type, defaultPosture.Metadata.Namespace, defaultPosture.Spec)
+
+				dm.UpdateDefaultPosture(event.Type, defaultPosture)
+
 			}
 		}
 	}

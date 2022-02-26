@@ -283,6 +283,10 @@ type Feeder struct {
 	SecurityPolicies     map[string]tp.MatchPolicies
 	SecurityPoliciesLock *sync.RWMutex
 
+	//DefaultPosture (namespace -> postures)
+	DefaultPostures     map[string]tp.DefaultPosture
+	DefaultPosturesLock *sync.RWMutex
+
 	// GKE
 	IsGKE bool
 }
@@ -344,6 +348,9 @@ func NewFeeder(node *tp.Node) *Feeder {
 	// initialize security policies
 	fd.SecurityPolicies = map[string]tp.MatchPolicies{}
 	fd.SecurityPoliciesLock = new(sync.RWMutex)
+
+	fd.DefaultPostures = map[string]tp.DefaultPosture{}
+	fd.DefaultPosturesLock = new(sync.RWMutex)
 
 	// check if GKE
 	if kl.IsInK8sCluster() {
