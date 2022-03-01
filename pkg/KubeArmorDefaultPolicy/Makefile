@@ -86,7 +86,7 @@ client/gen:
 	./tmp/code-generator/generate-groups.sh "all" github.com/kubearmor/KubeArmor/pkg/KubeArmorDefaultPolicy/client github.com/kubearmor/KubeArmor/pkg/KubeArmorDefaultPolicy/api security.kubearmor.com:v1 --go-header-file hack/boilerplate.go.txt
 	# check generated client at ./pkg/client
 	@cp -r ./github.com/kubearmor/KubeArmor/pkg/KubeArmorDefaultPolicy/client/* ./client/
-	@rm -rf ./github.com ./tmp/code-generator
+	@rm -rf ./tmp/code-generator
 
 ##@ Deployment
 

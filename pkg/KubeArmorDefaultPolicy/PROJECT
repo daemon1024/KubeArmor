@@ -1,7 +1,6 @@
 domain: kubearmor.com
 layout:
 - go.kubebuilder.io/v3
-multigroup: true
 projectName: kubearmordefaultpolicy
 repo: github.com/kubearmor/KubeArmor/pkg/KubeArmorDefaultPolicy
 resources:
@@ -14,4 +13,7 @@ resources:
   kind: KubeArmorDefaultPolicy
   path: github.com/kubearmor/KubeArmor/pkg/KubeArmorDefaultPolicy/api/v1
   version: v1
+  webhooks:
+    validation: true
+    webhookVersion: v1
 version: "3"

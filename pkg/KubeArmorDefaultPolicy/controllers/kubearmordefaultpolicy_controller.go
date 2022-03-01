@@ -40,14 +40,13 @@ type KubeArmorDefaultPolicyReconciler struct {
 func (r *KubeArmorDefaultPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	_ = log.FromContext(ctx)
 
-	policy := &securityv1.KubeArmorDefaultPolicy{}
-	if err := r.Get(ctx, req.NamespacedName, policy); err != nil {
+	policy := securityv1.KubeArmorDefaultPolicy{}
+	if err := r.Get(ctx, req.NamespacedName, &policy); err != nil {
 		if errors.IsNotFound(err) {
 			return ctrl.Result{}, client.IgnoreNotFound(err)
 		}
 		return ctrl.Result{}, err
 	}
-
 	return ctrl.Result{}, nil
 }
 
