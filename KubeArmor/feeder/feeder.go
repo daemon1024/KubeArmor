@@ -588,7 +588,7 @@ func (fd *Feeder) PushLog(log tp.Log) {
 		pbAlert.UID = log.UID
 
 		pbAlert.ParentProcessName = log.ParentProcessName
-		pbAlert.ProcessName = log.ProcessName
+		pbAlert.ProcessName = strings.ToValidUTF8(log.ProcessName, "")
 
 		if len(log.Enforcer) > 0 {
 			pbAlert.Enforcer = log.Enforcer
@@ -625,6 +625,9 @@ func (fd *Feeder) PushLog(log tp.Log) {
 
 		pbAlert.Result = log.Result
 
+		j, _ := json.MarshalIndent(pbAlert, "", "  ")
+		fmt.Println(string(j))
+
 		AlertLock.Lock()
 		defer AlertLock.Unlock()
 
@@ -657,7 +660,7 @@ func (fd *Feeder) PushLog(log tp.Log) {
 		pbLog.UID = log.UID
 
 		pbLog.ParentProcessName = log.ParentProcessName
-		pbLog.ProcessName = log.ProcessName
+		pbLog.ProcessName = strings.ToValidUTF8(log.ProcessName, "")
 
 		pbLog.Type = log.Type
 		pbLog.Source = log.Source

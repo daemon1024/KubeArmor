@@ -19,6 +19,7 @@ replace (
 )
 
 require (
+	github.com/cilium/ebpf v0.8.1
 	github.com/containerd/containerd v1.5.2
 	github.com/containerd/typeurl v1.0.2
 	github.com/docker/docker v20.10.7+incompatible
