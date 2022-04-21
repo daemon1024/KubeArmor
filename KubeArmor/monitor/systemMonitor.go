@@ -20,7 +20,6 @@ import (
 	"github.com/cilium/ebpf/link"
 	"github.com/cilium/ebpf/perf"
 	"github.com/cilium/ebpf/rlimit"
-	"github.com/iovisor/gobpf/bcc"
 
 	kl "github.com/kubearmor/KubeArmor/KubeArmor/common"
 	cfg "github.com/kubearmor/KubeArmor/KubeArmor/config"
@@ -193,7 +192,7 @@ func NewSystemMonitor(node tp.Node, logger *fd.Feeder, containers *map[string]tp
 	mon.UntrackedNamespaces = []string{"kube-system", "kubearmor"}
 
 	mon.UptimeTimeStamp = kl.GetUptimeTimestamp()
-	mon.HostByteOrder = bcc.GetHostByteOrder()
+	mon.HostByteOrder = binary.LittleEndian
 
 	mon.Ticker = time.NewTicker(time.Second * 10)
 

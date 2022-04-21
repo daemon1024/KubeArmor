@@ -14,7 +14,6 @@ KUBEARMOR_PID    = $(shell pgrep kubearmor)
 
 .PHONY: build
 build: protobuf
-	$(CURDIR)/patch.sh
 	cd $(CURDIR); go mod tidy
 	cd $(CURDIR); go build -o kubearmor main.go
 
@@ -24,7 +23,6 @@ protobuf:
 
 .PHONY: build-test
 build-test: testall
-	$(CURDIR)/patch.sh
 	cd $(CURDIR); go mod tidy
 	cd $(CURDIR); sudo -E $(GO_EXEC) test -covermode=atomic -coverpkg=./... -c . -o kubearmor
 
@@ -33,6 +31,7 @@ run: build
 	cd $(CRDDIR); kubectl apply -f KubeArmorPolicy.yaml
 	cd $(CRDDIR); kubectl apply -f KubeArmorHostPolicy.yaml
 	cd $(CURDIR); sudo rm -f /tmp/kubearmor.log
+	cd $(CURDIR)/BPF; make
 	cd $(CURDIR); sudo -E ./kubearmor -logPath=/tmp/kubearmor.log -enableKubeArmorPolicy=true -enableKubeArmorHostPolicy=true -hostVisibility=process,file,network,capabilities
 
 .PHONY: run-host-only

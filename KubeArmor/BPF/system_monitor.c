@@ -76,6 +76,7 @@
 #define ARG_TYPE3(type)        ENC_ARG_TYPE(3, type)
 #define ARG_TYPE4(type)        ENC_ARG_TYPE(4, type)
 #define ARG_TYPE5(type)        ENC_ARG_TYPE(5, type)
+#define PT_REGS_PARM6(x) ((x)->r9)
 #define DEC_ARG_TYPE(n, type)  ((type>>(8*n))&0xFF)
 
 enum {
