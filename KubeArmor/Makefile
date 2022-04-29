@@ -53,6 +53,7 @@ testall:
 	cd $(CURDIR)/feeder; sudo -E $(GO_EXEC) clean -testcache .; sudo -E $(GO_EXEC) test -v -coverprofile=.coverprofile .
 	cd $(CURDIR)/enforcer; go mod tidy
 	cd $(CURDIR)/enforcer; sudo -E $(GO_EXEC) clean -testcache .; sudo -E $(GO_EXEC) test -v -coverprofile=.coverprofile .
+	cd $(CURDIR)/BPF; make
 	cd $(CURDIR)/monitor; go mod tidy
 	cd $(CURDIR)/monitor; sudo -E $(GO_EXEC) clean -testcache .; sudo -E $(GO_EXEC) test -v -coverprofile=.coverprofile .
 
