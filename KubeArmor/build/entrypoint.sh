@@ -23,6 +23,9 @@ case $1 in
         ;;
 esac
 
+cd /KubeArmor/BPF
+make
+
 for ((i=0;i<5;i++))
 do
     /KubeArmor/kubearmor ${ARMOR_OPTIONS[@]}

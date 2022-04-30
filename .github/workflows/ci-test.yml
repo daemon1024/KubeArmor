@@ -27,6 +27,8 @@ jobs:
     steps:
       - name: Kernel version
         run: uname -r
+      
+      - run: cat /proc/kallsyms | grep do_exit
 
       - name: usr lib
         run: ls /usr/lib/gcc/x86_64-linux-gnu/
@@ -38,10 +40,10 @@ jobs:
         with:
           submodules: true
 
-      - name: Set up Go
-        uses: actions/setup-go@v2
-        with:
-          go-version: 1.17
+      # - name: Set up Go
+      #   uses: actions/setup-go@v2
+      #   with:
+      #     go-version: 1.17
 
       - name: Install Compilers
         run: |
@@ -53,16 +55,33 @@ jobs:
             sudo ln -s /usr/bin/$tool-9 /usr/bin/$tool
           done
 
-      - name: Setup K8s Env
+      - name: Setup Enviroment
+        id: vars
         run: |
+          if [ ${{ github.ref }} == "refs/heads/main" ]; then
+            echo ::set-output name=tag::latest
+          else
+            echo ::set-output name=tag::test
+          fi
+
           ./contribution/k3s/install_k3s.sh
 
-      - name: Run kubectl proxy
-        run: kubectl proxy &
+          cd KubeArmor/BPF/
+          make -C libbpf/src
+
+      - name: Generate KubeArmor artifacts
+        run: |
+            GITHUB_SHA=$GITHUB_SHA ./KubeArmor/build/build_kubearmor.sh ${{ steps.vars.outputs.tag }}
+
+      - name: Run KubeArmor
+        run: |
+            sed -i 's|kubearmor/kubearmor:latest|kubearmor/kubearmor:'${{ steps.vars.outputs.tag }}'|' ./KubeArmor/build/kubearmor-test-k3s.yaml
+            kubectl apply -f KubeArmor/build/kubearmor-test-k3s.yaml && kubectl wait --for=condition=ready --timeout=5m -n kube-system pod -l kubearmor-app=kubearmor
+            kubectl get pods -A
 
       - name: Test KubeArmor
-        run: ./tests/test-scenarios-github.sh
-        timeout-minutes: 15
+        run: |
+            ./tests/test-scenarios-github.sh ${{ steps.vars.outputs.tag }}
 
       - name: Archive log artifacts
         if: ${{ failure() }}
@@ -78,17 +97,17 @@ jobs:
         if: ${{ always() }}
         run: cat /tmp/kubearmor.test
 
-      - name: Measure Code Coverage
-        if: ${{ always() }}
-        run: |
-          go get github.com/modocache/gover
-          gover    
-          go tool cover -func=gover.coverprofile
-        working-directory: KubeArmor
-        env:
-          GOPATH: /home/runner/go
+      # - name: Measure Code Coverage
+      #   if: ${{ always() }}
+      #   run: |
+      #     go get github.com/modocache/gover
+      #     gover    
+      #     go tool cover -func=gover.coverprofile
+      #   working-directory: KubeArmor
+      #   env:
+      #     GOPATH: /home/runner/go
 
-      - uses: codecov/codecov-action@v2
-        if: ${{ always() }}
-        with:
-          files: ./KubeArmor/gover.coverprofile
+      # - uses: codecov/codecov-action@v2
+      #   if: ${{ always() }}
+      #   with:
+      #     files: ./KubeArmor/gover.coverprofile
