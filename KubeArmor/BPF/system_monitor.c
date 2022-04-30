@@ -1035,14 +1035,13 @@ int kprobe__do_exit(struct pt_regs *ctx)
 static __always_inline int save_args(u32 event_id, struct pt_regs *ctx)
 {
     args_t args = {};
-
-    struct pt_regs * ctx2 = (struct pt_regs *)PT_REGS_PARM1(ctx);  
-    bpf_probe_read(&args.args[0], sizeof(args.args[0]), &PT_REGS_PARM1(ctx2));
-    bpf_probe_read(&args.args[1], sizeof(args.args[1]), &PT_REGS_PARM2(ctx2));
-    bpf_probe_read(&args.args[2], sizeof(args.args[2]), &PT_REGS_PARM3(ctx2));
-    bpf_probe_read(&args.args[3], sizeof(args.args[3]), &PT_REGS_PARM4_SYSCALL(ctx2));
-    bpf_probe_read(&args.args[4], sizeof(args.args[4]), &PT_REGS_PARM5(ctx2));
-    bpf_probe_read(&args.args[5], sizeof(args.args[5]), &PT_REGS_PARM6(ctx2));
+  
+    bpf_probe_read(&args.args[0], sizeof(args.args[0]), &PT_REGS_PARM1(ctx));
+    bpf_probe_read(&args.args[1], sizeof(args.args[1]), &PT_REGS_PARM2(ctx));
+    bpf_probe_read(&args.args[2], sizeof(args.args[2]), &PT_REGS_PARM3(ctx));
+    bpf_probe_read(&args.args[3], sizeof(args.args[3]), &PT_REGS_PARM4(ctx));
+    bpf_probe_read(&args.args[4], sizeof(args.args[4]), &PT_REGS_PARM5(ctx));
+    bpf_probe_read(&args.args[5], sizeof(args.args[5]), &PT_REGS_PARM6(ctx));
 
     u32 tgid = bpf_get_current_pid_tgid();
     u64 id = ((u64)event_id << 32) | tgid;

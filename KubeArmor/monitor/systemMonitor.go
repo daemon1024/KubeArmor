@@ -137,6 +137,9 @@ type SystemMonitor struct {
 	// Probes Links
 	Probes map[string]link.Link
 
+	// HostProbes Links
+	HostProbes map[string]link.Link
+
 	// context + args (for container)
 	ContextChan chan ContextCombined
 
@@ -340,33 +343,31 @@ func (mon *SystemMonitor) InitBPF() error {
 	}
 
 	if mon.HostBpfModule != nil {
+
+		mon.HostProbes = make(map[string]link.Link)
+
 		for _, syscallName := range systemCalls {
-			_, err := link.Kprobe("sys_"+syscallName, mon.HostBpfModule.Programs["kprobe__"+syscallName])
+			mon.HostProbes["kprobe__"+syscallName], err = link.Kprobe("sys_"+syscallName, mon.HostBpfModule.Programs["kprobe__"+syscallName])
 			if err != nil {
 				return fmt.Errorf("error loading kprobe %s: %v", syscallName, err)
 			}
 
-			_, err = link.Kretprobe("sys_"+syscallName, mon.HostBpfModule.Programs["kretprobe__"+syscallName])
+			mon.HostProbes["kretprobe__"+syscallName], err = link.Kretprobe("sys_"+syscallName, mon.HostBpfModule.Programs["kretprobe__"+syscallName])
 			if err != nil {
 				return fmt.Errorf("error loading kretprobe %s: %v", syscallName, err)
 			}
 
 		}
 
-		// {category, event}
-		sysTracepoints := [][2]string{{"syscalls", "sys_exit_openat"}}
-
 		for _, sysTracepoint := range sysTracepoints {
-			_, err := link.Tracepoint(sysTracepoint[0], sysTracepoint[1], mon.HostBpfModule.Programs[sysTracepoint[1]])
+			mon.HostProbes[sysTracepoint[1]], err = link.Tracepoint(sysTracepoint[0], sysTracepoint[1], mon.HostBpfModule.Programs[sysTracepoint[1]])
 			if err != nil {
 				return fmt.Errorf("error:%s: %v", sysTracepoint, err)
 			}
 		}
 
-		sysKprobes := []string{"do_exit", "security_bprm_check", "security_file_open"}
-
 		for _, sysKprobe := range sysKprobes {
-			_, err := link.Kprobe("sys_"+sysKprobe, mon.HostBpfModule.Programs["kprobe__"+sysKprobe])
+			mon.HostProbes["kprobe__"+sysKprobe], err = link.Kprobe(sysKprobe, mon.HostBpfModule.Programs["kprobe__"+sysKprobe])
 			if err != nil {
 				return fmt.Errorf("error loading kprobe %s: %v", sysKprobe, err)
 			}
@@ -415,6 +416,12 @@ func (mon *SystemMonitor) DestroySystemMonitor() error {
 	}
 
 	for _, link := range mon.Probes {
+		if err := link.Close(); err != nil {
+			return err
+		}
+	}
+
+	for _, link := range mon.HostProbes {
 		if err := link.Close(); err != nil {
 			return err
 		}
