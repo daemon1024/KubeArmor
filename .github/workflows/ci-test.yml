@@ -83,6 +83,11 @@ jobs:
         run: |
             ./tests/test-scenarios-github.sh ${{ steps.vars.outputs.tag }}
 
+      - name: Capture KubeArmor logs
+        if: ${{ failure() }}
+        run: kubectl exec -n kube-system daemonset/kubearmor -- cat /tmp/kubearmor.log > /tmp/kubearmor.log
+            
+      
       - name: Archive log artifacts
         if: ${{ failure() }}
         uses: actions/upload-artifact@v2
