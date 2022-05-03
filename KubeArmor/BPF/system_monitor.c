@@ -75,8 +75,9 @@
 #define ARG_TYPE3(type)        ENC_ARG_TYPE(3, type)
 #define ARG_TYPE4(type)        ENC_ARG_TYPE(4, type)
 #define ARG_TYPE5(type)        ENC_ARG_TYPE(5, type)
-#define PT_REGS_PARM6(x) ((x)->r9)
 #define DEC_ARG_TYPE(n, type)  ((type>>(8*n))&0xFF)
+#define PT_REGS_PARM6(x) ((x)->r9)
+#define GET_FIELD_ADDR(field) &field
 
 enum {
     // file
@@ -803,7 +804,8 @@ int kprobe__security_bprm_check(struct pt_regs *ctx)
     if (f == NULL)
         return 0;
 
-	struct path p = READ_KERN(f->f_path);
+	struct path p;
+    bpf_probe_read(&p, sizeof(struct path), GET_FIELD_ADDR(f->f_path));
 
 	bufs_t *string_p = get_buffer(EXEC_BUF_TYPE);
 	if (string_p == NULL)
@@ -862,9 +864,14 @@ int kprobe__execve(struct pt_regs *ctx)
 {
     sys_context_t context = {};
 
+#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 17, 0)
     char *filename = (char *)PT_REGS_PARM1(ctx);
-
     unsigned long argv = PT_REGS_PARM2(ctx);
+#else
+    struct pt_regs * ctx2 = (struct pt_regs *)PT_REGS_PARM1(ctx);  
+    char *filename = (char *)READ_KERN(PT_REGS_PARM1(ctx2));
+    unsigned long argv = READ_KERN(PT_REGS_PARM2(ctx2));
+#endif
 
     if (!add_pid_ns())
         return 0;
@@ -931,6 +938,8 @@ int kprobe__execveat(struct pt_regs *ctx)
 {
     sys_context_t context = {};
 
+#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 17, 0)
+    
     const int dirfd = PT_REGS_PARM1(ctx);
 
     const char __user *pathname = (void *)&PT_REGS_PARM2(ctx);
@@ -938,6 +947,18 @@ int kprobe__execveat(struct pt_regs *ctx)
     unsigned long argv = PT_REGS_PARM3(ctx);
 
     int flags = (int)PT_REGS_PARM5(ctx);
+
+#else
+    struct pt_regs * ctx2 = (struct pt_regs *)PT_REGS_PARM1(ctx);  
+    
+    const int dirfd = READ_KERN(PT_REGS_PARM1(ctx2));
+
+    const char __user *pathname = (void *)READ_KERN(PT_REGS_PARM2(ctx2));
+
+    unsigned long argv = READ_KERN(PT_REGS_PARM3(ctx2));
+
+    int flags = (int)READ_KERN(PT_REGS_PARM5(ctx2));
+#endif
 
     if (!add_pid_ns())
         return 0;
@@ -1036,12 +1057,22 @@ static __always_inline int save_args(u32 event_id, struct pt_regs *ctx)
 {
     args_t args = {};
   
-    bpf_probe_read(&args.args[0], sizeof(args.args[0]), &PT_REGS_PARM1(ctx));
-    bpf_probe_read(&args.args[1], sizeof(args.args[1]), &PT_REGS_PARM2(ctx));
-    bpf_probe_read(&args.args[2], sizeof(args.args[2]), &PT_REGS_PARM3(ctx));
-    bpf_probe_read(&args.args[3], sizeof(args.args[3]), &PT_REGS_PARM4(ctx));
-    bpf_probe_read(&args.args[4], sizeof(args.args[4]), &PT_REGS_PARM5(ctx));
-    bpf_probe_read(&args.args[5], sizeof(args.args[5]), &PT_REGS_PARM6(ctx));
+#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 17, 0)
+    args.args[0] = PT_REGS_PARM1(ctx);
+    args.args[1] = PT_REGS_PARM2(ctx);
+    args.args[2] = PT_REGS_PARM3(ctx);
+    args.args[3] = PT_REGS_PARM4(ctx);
+    args.args[4] = PT_REGS_PARM5(ctx);
+    args.args[5] = PT_REGS_PARM6(ctx);
+#else
+    struct pt_regs * ctx2 = (struct pt_regs *)PT_REGS_PARM1(ctx);  
+    bpf_probe_read(&args.args[0], sizeof(args.args[0]), &PT_REGS_PARM1(ctx2));
+    bpf_probe_read(&args.args[1], sizeof(args.args[1]), &PT_REGS_PARM2(ctx2));
+    bpf_probe_read(&args.args[2], sizeof(args.args[2]), &PT_REGS_PARM3(ctx2));
+    bpf_probe_read(&args.args[3], sizeof(args.args[3]), &PT_REGS_PARM4_SYSCALL(ctx2));
+    bpf_probe_read(&args.args[4], sizeof(args.args[4]), &PT_REGS_PARM5(ctx2));
+    bpf_probe_read(&args.args[5], sizeof(args.args[5]), &PT_REGS_PARM6(ctx2));
+#endif
 
     u32 tgid = bpf_get_current_pid_tgid();
     u64 id = ((u64)event_id << 32) | tgid;
