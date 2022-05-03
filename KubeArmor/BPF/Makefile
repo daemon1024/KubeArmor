@@ -4,7 +4,6 @@ KRNDIR = /usr/src/linux-headers-$(KRNVER)
 endif
 LIBBPF = $(CURDIR)/libbpf
 
-BIN = $(CURDIR)
 CL  = clang
 CC  = gcc
 Q   = @
@@ -34,9 +33,9 @@ SRCDIR=$(CURDIR)
 
 SRCS_KERN:=$(wildcard $(SRCDIR)/*.c)
 SRCN:=$(notdir $(SRCS_KERN))
-BOBJS:=$(patsubst %.c,$(BIN)/%.bpf.o,$(SRCN))
+SYSMONITOR = $(CURDIR)/system_monitor.c
 
-vpath %.c $(SRCDIR)
+# vpath %.c $(SRCDIR)
 
 RED=\033[0;31m
 GREEN=\033[0;32m
@@ -44,7 +43,7 @@ CYAN=\033[0;36m
 NC=\033[0m
 
 .PHONY: all
-all: chkdir $(BOBJS)
+all: chkdir system_monitor.bpf.o system_monitor.container.bpf.o system_monitor.host.bpf.o
 
 .PHONY: chkdir
 chkdir:
@@ -56,6 +55,22 @@ ifeq (,$(wildcard $(LIBBPF)/src/libbpf.a))
 	make -C $(LIBBPF)/src
 endif
 
-$(BIN)/%.bpf.o: %.c
+system_monitor.bpf.o: $(SYSMONITOR)
+	@echo "Compiling eBPF bytecode: $(GREEN)$@$(NC) ..."
+	$(Q)$(CL) $(KF) -DMONITOR_HOST_AND_CONTAINER -c $< -o -| llc -march=bpf -mcpu=probe -filetype=obj -o $@
+
+system_monitor.container.bpf.o: $(SYSMONITOR)
 	@echo "Compiling eBPF bytecode: $(GREEN)$@$(NC) ..."
 	$(Q)$(CL) $(KF) -c $< -o -| llc -march=bpf -mcpu=probe -filetype=obj -o $@
+
+system_monitor.host.bpf.o: $(SYSMONITOR)
+	@echo "Compiling eBPF bytecode: $(GREEN)$@$(NC) ..."
+	$(Q)$(CL) $(KF) -DMONITOR_HOST -c $< -o -| llc -march=bpf -mcpu=probe -filetype=obj -o $@
+
+$(BPFOBJDIR):
+	$(Q)mkdir -p $@
+
+
+# cleanup
+clean:
+	$(Q)rm -rf *.o

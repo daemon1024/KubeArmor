@@ -266,12 +266,12 @@ func (mon *SystemMonitor) InitBPF() error {
 	}
 
 	if cfg.GlobalCfg.Policy && !cfg.GlobalCfg.HostPolicy { // container only
-		mon.BpfModule, err = cle.LoadCollection(bpfPath + "system_monitor.bpf.o")
+		mon.BpfModule, err = cle.LoadCollection(bpfPath + "system_monitor.container.bpf.o")
 		if err != nil {
 			return fmt.Errorf("bpf module is nil %v", err)
 		}
 	} else if !cfg.GlobalCfg.Policy && cfg.GlobalCfg.HostPolicy { // host only
-		mon.HostBpfModule, err = cle.LoadCollection(bpfPath + "system_monitor.bpf.o")
+		mon.HostBpfModule, err = cle.LoadCollection(bpfPath + "system_monitor.host.bpf.o")
 		if err != nil {
 			return fmt.Errorf("bpf module is nil %v", err)
 		}
@@ -282,12 +282,12 @@ func (mon *SystemMonitor) InitBPF() error {
 				return fmt.Errorf("bpf module is nil %v", err)
 			}
 		} else { // 5.x
-			mon.BpfModule, err = cle.LoadCollection(bpfPath + "system_monitor.bpf.o")
+			mon.BpfModule, err = cle.LoadCollection(bpfPath + "system_monitor.container.bpf.o")
 			if err != nil {
 				return fmt.Errorf("bpf module is nil %v", err)
 			}
 
-			mon.HostBpfModule, err = cle.LoadCollection(bpfPath + "system_monitor.bpf.o")
+			mon.HostBpfModule, err = cle.LoadCollection(bpfPath + "system_monitor.host.bpf.o")
 			if err != nil {
 				return fmt.Errorf("bpf module is nil %v", err)
 			}
@@ -454,50 +454,10 @@ func (mon *SystemMonitor) TraceSyscall() {
 					continue
 				}
 
-				// // Parse the perf event entry into a bpfEvent structure.
-				// event, err := readContextFromBuff(bytes.NewBuffer(record.RawSample))
-				// if err != nil {
-				// 	mon.Logger.Warnf("parsing perf event: %s", err)
-				// 	continue
-				// }
-
-				// j, _ := json.MarshalIndent(event, "", "  ")
-				// mon.Logger.Print(string(j))
-
 				mon.SyscallChannel <- record.RawSample
 
 			}
 		}()
-		// for {
-		// 	mon.Logger.Printf("\n\nStarting reading from perf\n\n")
-		// 	record, err := mon.SyscallPerfMap.Read()
-		// 	if err != nil {
-		// 		mon.Logger.Warnf("reading from perf event reader: %s", err)
-		// 		if errors.Is(err, perf.ErrClosed) {
-		// 			break
-		// 		}
-		// 		continue
-		// 	}
-
-		// 	if record.LostSamples != 0 {
-		// 		mon.Logger.Warnf("perf event ring buffer full, dropped %d samples", record.LostSamples)
-
-		// 		// mon.SyscallLostChannel <- record.LostSamples
-		// 		continue
-		// 	}
-
-		// 	// Parse the perf event entry into a bpfEvent structure.
-		// 	event, err := readContextFromBuff(bytes.NewBuffer(record.RawSample))
-		// 	if err != nil {
-		// 		mon.Logger.Warnf("parsing perf event: %s", err)
-		// 		continue
-		// 	}
-
-		// 	j, _ := json.MarshalIndent(event, "", "  ")
-		// 	mon.Logger.Print(string(j))
-		// 	// mon.SyscallChannel <- record.RawSample
-
-		// }
 	} else {
 		return
 	}
