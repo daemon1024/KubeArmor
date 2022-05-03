@@ -45,6 +45,30 @@ spec:
       hostNetwork: true
       restartPolicy: Always
       dnsPolicy: ClusterFirstWithHostNet
+      initContainers:
+      - name: init
+        image: kubearmor/kubearmor-init
+        imagePullPolicy: Never
+        securityContext:
+          privileged: true
+        volumeMounts:
+          - mountPath: /opt/kubearmor/BPF
+            name: bpf
+          - mountPath: /lib/modules
+            name: lib-modules-path
+            readOnly: true
+          - mountPath: /sys/fs/bpf
+            name: sys-fs-bpf-path
+          - mountPath: /sys/kernel/security
+            name: sys-kernel-security-path
+          - mountPath: /sys/kernel/debug
+            name: sys-kernel-debug-path
+          - mountPath: /media/root/etc/os-release
+            name: os-release-path
+            readOnly: true
+          - mountPath: /usr/src
+            name: usr-src-path
+            readOnly: true
       containers:
       - name: kubearmor
         image: kubearmor/kubearmor:latest
@@ -55,6 +79,8 @@ spec:
         ports:
         - containerPort: 32767
         volumeMounts:
+        - mountPath: /opt/kubearmor/BPF
+          name: bpf
         - name: docker-sock-path # docker (read-only)
           mountPath: /var/run/docker.sock
           readOnly: true 
@@ -93,6 +119,8 @@ spec:
         terminationMessagePath: /dev/termination-log
       terminationGracePeriodSeconds: 30
       volumes:
+      - emptyDir: {}
+        name: bpf
       - name: docker-sock-path # docker
         hostPath:
           path: /var/run/docker.sock
