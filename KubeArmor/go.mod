@@ -19,6 +19,7 @@ replace (
 )
 
 require (
+	github.com/cilium/ebpf v0.8.1
 	github.com/containerd/containerd v1.5.2
 	github.com/containerd/typeurl v1.0.2
 	github.com/docker/docker v20.10.7+incompatible
@@ -26,7 +27,6 @@ require (
 	github.com/google/gofuzz v1.2.0 // indirect
 	github.com/google/uuid v1.3.0
 	github.com/gorilla/mux v1.8.0 // indirect
-	github.com/iovisor/gobpf v0.2.0
 	github.com/kubearmor/KubeArmor/protobuf v0.0.0-20211217093440-d99a1cb5f908
 	github.com/moby/term v0.0.0-20201216013528-df9cb8a40635 // indirect
 	github.com/morikuni/aec v1.0.0 // indirect

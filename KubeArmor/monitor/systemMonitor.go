@@ -16,7 +16,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/iovisor/gobpf/bcc"
+	cle "github.com/cilium/ebpf"
+	"github.com/cilium/ebpf/link"
+	"github.com/cilium/ebpf/perf"
+	"github.com/cilium/ebpf/rlimit"
 
 	kl "github.com/kubearmor/KubeArmor/KubeArmor/common"
 	cfg "github.com/kubearmor/KubeArmor/KubeArmor/config"
@@ -128,7 +131,13 @@ type SystemMonitor struct {
 	NsMapLock *sync.RWMutex
 
 	// system monitor (for container)
-	BpfModule *bcc.Module
+	BpfModule *cle.Collection
+
+	// Probes Links
+	Probes map[string]link.Link
+
+	// HostProbes Links
+	HostProbes map[string]link.Link
 
 	// context + args (for container)
 	ContextChan chan ContextCombined
@@ -136,10 +145,10 @@ type SystemMonitor struct {
 	// process + file (for container)
 	SyscallChannel     chan []byte
 	SyscallLostChannel chan uint64
-	SyscallPerfMap     *bcc.PerfMap
+	SyscallPerfMap     *perf.Reader
 
 	// system monitor (for host)
-	HostBpfModule *bcc.Module
+	HostBpfModule *cle.Collection
 
 	// context + args (for host)
 	HostContextChan chan ContextCombined
@@ -147,7 +156,7 @@ type SystemMonitor struct {
 	// process + file (for host)
 	HostSyscallChannel     chan []byte
 	HostSyscallLostChannel chan uint64
-	HostSyscallPerfMap     *bcc.PerfMap
+	HostSyscallPerfMap     *perf.Reader
 
 	// lists to skip
 	UntrackedNamespaces []string
@@ -183,7 +192,7 @@ func NewSystemMonitor(node *tp.Node, logger *fd.Feeder, containers *map[string]t
 	mon.UntrackedNamespaces = []string{"kube-system", "kubearmor"}
 
 	mon.UptimeTimeStamp = kl.GetUptimeTimestamp()
-	mon.HostByteOrder = bcc.GetHostByteOrder()
+	mon.HostByteOrder = binary.LittleEndian
 
 	mon.Ticker = time.NewTicker(time.Second * 10)
 
@@ -236,166 +245,135 @@ func (mon *SystemMonitor) InitBPF() error {
 		}
 	}
 
-	bpfPath := homeDir + "/BPF/system_monitor.c"
+	bpfPath := homeDir + "/BPF/"
 	if _, err := os.Stat(filepath.Clean(bpfPath)); err != nil {
 		// go test
-		bpfPath = os.Getenv("PWD") + "/../BPF/system_monitor.c"
+
+		bpfPath = os.Getenv("PWD") + "/../BPF/"
 		if _, err := os.Stat(filepath.Clean(bpfPath)); err != nil {
 			return err
 		}
 	}
 
-	content, err := ioutil.ReadFile(filepath.Clean(bpfPath))
-	if err != nil {
-		return err
-	}
-	bpfSource := string(content)
-
 	mon.Logger.Print("Initializing an eBPF program")
 
+	// Allow the current process to lock memory for eBPF resources.
+	if err := rlimit.RemoveMemlock(); err != nil {
+		return fmt.Errorf("error removing memlock %v", err)
+	}
+
 	if cfg.GlobalCfg.Policy && !cfg.GlobalCfg.HostPolicy { // container only
-		mon.BpfModule = bcc.NewModule(bpfSource, []string{"-O2"})
-		if mon.BpfModule == nil {
-			return errors.New("bpf module is nil")
+		mon.BpfModule, err = cle.LoadCollection(bpfPath + "system_monitor.container.bpf.o")
+		if err != nil {
+			return fmt.Errorf("bpf module is nil %v", err)
 		}
 	} else if !cfg.GlobalCfg.Policy && cfg.GlobalCfg.HostPolicy { // host only
-		mon.HostBpfModule = bcc.NewModule(bpfSource, []string{"-O2", "-DMONITOR_HOST"})
-		if mon.HostBpfModule == nil {
-			return errors.New("bpf module is nil")
+		mon.HostBpfModule, err = cle.LoadCollection(bpfPath + "system_monitor.host.bpf.o")
+		if err != nil {
+			return fmt.Errorf("bpf module is nil %v", err)
 		}
 	} else if cfg.GlobalCfg.Policy && cfg.GlobalCfg.HostPolicy { // container and host
 		if strings.HasPrefix(mon.Node.KernelVersion, "4.") { // 4.x
-			mon.BpfModule = bcc.NewModule(bpfSource, []string{"-O2", "-DMONITOR_HOST_AND_CONTAINER"})
-			if mon.BpfModule == nil {
-				return errors.New("bpf module is nil")
+			mon.BpfModule, err = cle.LoadCollection(bpfPath + "system_monitor.bpf.o")
+			if err != nil {
+				return fmt.Errorf("bpf module is nil %v", err)
 			}
 		} else { // 5.x
-			mon.BpfModule = bcc.NewModule(bpfSource, []string{"-O2"})
-			if mon.BpfModule == nil {
-				return errors.New("bpf module is nil")
+			mon.BpfModule, err = cle.LoadCollection(bpfPath + "system_monitor.container.bpf.o")
+			if err != nil {
+				return fmt.Errorf("bpf module is nil %v", err)
 			}
 
-			mon.HostBpfModule = bcc.NewModule(bpfSource, []string{"-O2", "-DMONITOR_HOST"})
-			if mon.HostBpfModule == nil {
-				return errors.New("bpf module is nil")
+			mon.HostBpfModule, err = cle.LoadCollection(bpfPath + "system_monitor.host.bpf.o")
+			if err != nil {
+				return fmt.Errorf("bpf module is nil %v", err)
 			}
 		}
 	}
 
 	mon.Logger.Print("Initialized the eBPF program")
 
-	sysPrefix := bcc.GetSyscallPrefix()
+	// sysPrefix := bcc.GetSyscallPrefix()
 	systemCalls := []string{"open", "openat", "execve", "execveat", "socket", "connect", "accept", "bind", "listen"}
+	// {category, event}
+	sysTracepoints := [][2]string{{"syscalls", "sys_exit_openat"}}
+	sysKprobes := []string{"do_exit", "security_bprm_check", "security_file_open"}
 
 	if mon.BpfModule != nil {
+
+		mon.Probes = make(map[string]link.Link)
+
 		for _, syscallName := range systemCalls {
-			kp, err := mon.BpfModule.LoadKprobe(fmt.Sprintf("syscall__%s", syscallName))
+			mon.Probes["kprobe__"+syscallName], err = link.Kprobe("sys_"+syscallName, mon.BpfModule.Programs["kprobe__"+syscallName])
 			if err != nil {
 				return fmt.Errorf("error loading kprobe %s: %v", syscallName, err)
 			}
-			err = mon.BpfModule.AttachKprobe(sysPrefix+syscallName, kp, -1)
+
+			mon.Probes["kretprobe__"+syscallName], err = link.Kretprobe("sys_"+syscallName, mon.BpfModule.Programs["kretprobe__"+syscallName])
 			if err != nil {
-				return fmt.Errorf("error attaching kprobe %s: %v", syscallName, err)
+				return fmt.Errorf("error loading kretprobe %s: %v", syscallName, err)
 			}
-			kp, err = mon.BpfModule.LoadKprobe(fmt.Sprintf("trace_ret_%s", syscallName))
-			if err != nil {
-				return fmt.Errorf("error loading kprobe %s: %v", syscallName, err)
-			}
-			err = mon.BpfModule.AttachKretprobe(sysPrefix+syscallName, kp, -1)
-			if err != nil {
-				return fmt.Errorf("error attaching kretprobe %s: %v", syscallName, err)
-			}
+
 		}
 
-		// {category, event}
-		sysTracepoints := [][2]string{{"syscalls", "sys_exit_openat"}}
-
 		for _, sysTracepoint := range sysTracepoints {
-			rtp, err := mon.BpfModule.LoadTracepoint(fmt.Sprintf("tracepoint__%s__%s", sysTracepoint[0], sysTracepoint[1]))
+			mon.Probes[sysTracepoint[1]], err = link.Tracepoint(sysTracepoint[0], sysTracepoint[1], mon.BpfModule.Programs[sysTracepoint[1]])
 			if err != nil {
 				return fmt.Errorf("error:%s: %v", sysTracepoint, err)
 			}
-			err = mon.BpfModule.AttachTracepoint(fmt.Sprintf("%s:%s", sysTracepoint[0], sysTracepoint[1]), rtp)
-			if err != nil {
-				return fmt.Errorf("error attaching tracepoint probe %s: %v", sysTracepoint, err)
-			}
 		}
 
-		sysKprobes := []string{"do_exit", "security_bprm_check", "security_file_open"}
-
 		for _, sysKprobe := range sysKprobes {
-			kp, err := mon.BpfModule.LoadKprobe(fmt.Sprintf("trace_%s", sysKprobe))
+			mon.Probes["kprobe__"+sysKprobe], err = link.Kprobe(sysKprobe, mon.BpfModule.Programs["kprobe__"+sysKprobe])
 			if err != nil {
 				return fmt.Errorf("error loading kprobe %s: %v", sysKprobe, err)
 			}
-			err = mon.BpfModule.AttachKprobe(sysKprobe, kp, -1)
-			if err != nil {
-				return fmt.Errorf("error attaching kprobe %s: %v", sysKprobe, err)
-			}
 		}
 
-		eventsTable := bcc.NewTable(mon.BpfModule.TableId("sys_events"), mon.BpfModule)
 		mon.SyscallChannel = make(chan []byte, 8192)
 		mon.SyscallLostChannel = make(chan uint64)
 
-		mon.SyscallPerfMap, err = bcc.InitPerfMapWithPageCnt(eventsTable, mon.SyscallChannel, mon.SyscallLostChannel, 64)
+		mon.SyscallPerfMap, err = perf.NewReader(mon.BpfModule.Maps["sys_events"], os.Getpagesize())
 		if err != nil {
 			return fmt.Errorf("error initializing events perf map: %v", err)
 		}
 	}
 
 	if mon.HostBpfModule != nil {
+
+		mon.HostProbes = make(map[string]link.Link)
+
 		for _, syscallName := range systemCalls {
-			kp, err := mon.HostBpfModule.LoadKprobe(fmt.Sprintf("syscall__%s", syscallName))
+			mon.HostProbes["kprobe__"+syscallName], err = link.Kprobe("sys_"+syscallName, mon.HostBpfModule.Programs["kprobe__"+syscallName])
 			if err != nil {
 				return fmt.Errorf("error loading kprobe %s: %v", syscallName, err)
 			}
-			err = mon.HostBpfModule.AttachKprobe(sysPrefix+syscallName, kp, -1)
+
+			mon.HostProbes["kretprobe__"+syscallName], err = link.Kretprobe("sys_"+syscallName, mon.HostBpfModule.Programs["kretprobe__"+syscallName])
 			if err != nil {
-				return fmt.Errorf("error attaching kprobe %s: %v", syscallName, err)
+				return fmt.Errorf("error loading kretprobe %s: %v", syscallName, err)
 			}
-			kp, err = mon.HostBpfModule.LoadKprobe(fmt.Sprintf("trace_ret_%s", syscallName))
-			if err != nil {
-				return fmt.Errorf("error loading kprobe %s: %v", syscallName, err)
-			}
-			err = mon.HostBpfModule.AttachKretprobe(sysPrefix+syscallName, kp, -1)
-			if err != nil {
-				return fmt.Errorf("error attaching kretprobe %s: %v", syscallName, err)
-			}
+
 		}
 
-		// {category, event}
-		sysTracepoints := [][2]string{{"syscalls", "sys_exit_openat"}}
-
 		for _, sysTracepoint := range sysTracepoints {
-			rtp, err := mon.HostBpfModule.LoadTracepoint(fmt.Sprintf("tracepoint__%s__%s", sysTracepoint[0], sysTracepoint[1]))
+			mon.HostProbes[sysTracepoint[1]], err = link.Tracepoint(sysTracepoint[0], sysTracepoint[1], mon.HostBpfModule.Programs[sysTracepoint[1]])
 			if err != nil {
 				return fmt.Errorf("error:%s: %v", sysTracepoint, err)
 			}
-			err = mon.HostBpfModule.AttachTracepoint(fmt.Sprintf("%s:%s", sysTracepoint[0], sysTracepoint[1]), rtp)
-			if err != nil {
-				return fmt.Errorf("error attaching tracepoint probe %s: %v", sysTracepoint, err)
-			}
 		}
 
-		sysKprobes := []string{"do_exit", "security_bprm_check", "security_file_open"}
-
 		for _, sysKprobe := range sysKprobes {
-			kp, err := mon.HostBpfModule.LoadKprobe(fmt.Sprintf("trace_%s", sysKprobe))
+			mon.HostProbes["kprobe__"+sysKprobe], err = link.Kprobe(sysKprobe, mon.HostBpfModule.Programs["kprobe__"+sysKprobe])
 			if err != nil {
 				return fmt.Errorf("error loading kprobe %s: %v", sysKprobe, err)
 			}
-			err = mon.HostBpfModule.AttachKprobe(sysKprobe, kp, -1)
-			if err != nil {
-				return fmt.Errorf("error attaching kprobe %s: %v", sysKprobe, err)
-			}
 		}
 
-		hostEventsTable := bcc.NewTable(mon.HostBpfModule.TableId("sys_events"), mon.HostBpfModule)
 		mon.HostSyscallChannel = make(chan []byte, 8192)
 		mon.HostSyscallLostChannel = make(chan uint64)
 
-		mon.HostSyscallPerfMap, err = bcc.InitPerfMapWithPageCnt(hostEventsTable, mon.HostSyscallChannel, mon.HostSyscallLostChannel, 64)
+		mon.HostSyscallPerfMap, err = perf.NewReader(mon.HostBpfModule.Maps["sys_events"], os.Getpagesize())
 		if err != nil {
 			return fmt.Errorf("error initializing events perf map: %v", err)
 		}
@@ -407,7 +385,9 @@ func (mon *SystemMonitor) InitBPF() error {
 // DestroySystemMonitor Function
 func (mon *SystemMonitor) DestroySystemMonitor() error {
 	if mon.SyscallPerfMap != nil {
-		mon.SyscallPerfMap.Stop()
+		if err := mon.SyscallPerfMap.Close(); err != nil {
+			return err
+		}
 	}
 
 	if mon.BpfModule != nil {
@@ -419,7 +399,9 @@ func (mon *SystemMonitor) DestroySystemMonitor() error {
 	}
 
 	if mon.HostSyscallPerfMap != nil {
-		mon.HostSyscallPerfMap.Stop()
+		if err := mon.HostSyscallPerfMap.Close(); err != nil {
+			return err
+		}
 	}
 
 	if mon.HostBpfModule != nil {
@@ -428,6 +410,18 @@ func (mon *SystemMonitor) DestroySystemMonitor() error {
 
 	if mon.HostContextChan != nil {
 		close(mon.HostContextChan)
+	}
+
+	for _, link := range mon.Probes {
+		if err := link.Close(); err != nil {
+			return err
+		}
+	}
+
+	for _, link := range mon.HostProbes {
+		if err := link.Close(); err != nil {
+			return err
+		}
 	}
 
 	mon.Ticker.Stop()
@@ -442,7 +436,25 @@ func (mon *SystemMonitor) DestroySystemMonitor() error {
 // TraceSyscall Function
 func (mon *SystemMonitor) TraceSyscall() {
 	if mon.SyscallPerfMap != nil {
-		mon.SyscallPerfMap.Start()
+		go func() {
+			for {
+				record, err := mon.SyscallPerfMap.Read()
+				if err != nil {
+					if errors.Is(err, perf.ErrClosed) {
+						return
+					}
+					continue
+				}
+
+				if record.LostSamples != 0 {
+					mon.SyscallLostChannel <- record.LostSamples
+					continue
+				}
+
+				mon.SyscallChannel <- record.RawSample
+
+			}
+		}()
 	} else {
 		return
 	}
@@ -648,7 +660,25 @@ func (mon *SystemMonitor) TraceSyscall() {
 // TraceHostSyscall Function
 func (mon *SystemMonitor) TraceHostSyscall() {
 	if mon.HostSyscallPerfMap != nil {
-		mon.HostSyscallPerfMap.Start()
+		go func() {
+			for {
+				record, err := mon.HostSyscallPerfMap.Read()
+				if err != nil {
+					if errors.Is(err, perf.ErrClosed) {
+						return
+					}
+					continue
+				}
+
+				if record.LostSamples != 0 {
+					mon.HostSyscallLostChannel <- record.LostSamples
+					continue
+				}
+
+				mon.HostSyscallChannel <- record.RawSample
+
+			}
+		}()
 	} else {
 		return
 	}
