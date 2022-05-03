@@ -276,22 +276,22 @@ func (mon *SystemMonitor) InitBPF() error {
 			return fmt.Errorf("bpf module is nil %v", err)
 		}
 	} else if cfg.GlobalCfg.Policy && cfg.GlobalCfg.HostPolicy { // container and host
-		if strings.HasPrefix(mon.KernelVersion, "4.") { // 4.x
-			mon.BpfModule, err = cle.LoadCollection(bpfPath + "system_monitor.bpf.o")
-			if err != nil {
-				return fmt.Errorf("bpf module is nil %v", err)
-			}
-		} else { // 5.x
-			mon.BpfModule, err = cle.LoadCollection(bpfPath + "system_monitor.container.bpf.o")
-			if err != nil {
-				return fmt.Errorf("bpf module is nil %v", err)
-			}
-
-			mon.HostBpfModule, err = cle.LoadCollection(bpfPath + "system_monitor.host.bpf.o")
-			if err != nil {
-				return fmt.Errorf("bpf module is nil %v", err)
-			}
+		// if strings.HasPrefix(mon.KernelVersion, "4.") { // 4.x
+		mon.BpfModule, err = cle.LoadCollection(bpfPath + "system_monitor.bpf.o")
+		if err != nil {
+			return fmt.Errorf("bpf module is nil %v", err)
 		}
+		// } else { // 5.x
+		// 	mon.BpfModule, err = cle.LoadCollection(bpfPath + "system_monitor.container.bpf.o")
+		// 	if err != nil {
+		// 		return fmt.Errorf("bpf module is nil %v", err)
+		// 	}
+
+		// 	mon.HostBpfModule, err = cle.LoadCollection(bpfPath + "system_monitor.host.bpf.o")
+		// 	if err != nil {
+		// 		return fmt.Errorf("bpf module is nil %v", err)
+		// 	}
+		// }
 	}
 
 	mon.Logger.Print("Initialized the eBPF program")
