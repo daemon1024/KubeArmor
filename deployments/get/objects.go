@@ -365,7 +365,11 @@ func GenerateDaemonSet(env, namespace string) *appsv1.DaemonSet {
 		"-logPath=/tmp/kubearmor.log",
 	}
 
-	var volumeMounts = []corev1.VolumeMount{
+	var containerVolumeMounts = []corev1.VolumeMount{
+		{
+			Name:      "bpf",
+			MountPath: "/opt/kubearmor/BPF",
+		},
 		{
 			Name:      "lib-modules-path", //BPF (read-only)
 			MountPath: "/lib/modules",
@@ -391,6 +395,12 @@ func GenerateDaemonSet(env, namespace string) *appsv1.DaemonSet {
 	}
 
 	var volumes = []corev1.Volume{
+		{
+			Name: "bpf",
+			VolumeSource: corev1.VolumeSource{
+				EmptyDir: &corev1.EmptyDirVolumeSource{},
+			},
+		},
 		{
 			Name: "lib-modules-path",
 			VolumeSource: corev1.VolumeSource{
@@ -440,7 +450,7 @@ func GenerateDaemonSet(env, namespace string) *appsv1.DaemonSet {
 
 	args = append(args, defaultConfigs[env].Args...)
 
-	volumeMounts = append(volumeMounts, defaultConfigs[env].VolumeMounts...)
+	volumeMounts := append(containerVolumeMounts, defaultConfigs[env].VolumeMounts...)
 	volumes = append(volumes, defaultConfigs[env].Volumes...)
 
 	return &appsv1.DaemonSet{
@@ -478,6 +488,16 @@ func GenerateDaemonSet(env, namespace string) *appsv1.DaemonSet {
 					HostNetwork:   true,
 					RestartPolicy: "Always",
 					DNSPolicy:     "ClusterFirstWithHostNet",
+					InitContainers: []corev1.Container{
+						{
+							Name:  "init",
+							Image: "kubearmor/kubearmor-init:latest",
+							SecurityContext: &corev1.SecurityContext{
+								Privileged: &privileged,
+							},
+							VolumeMounts: containerVolumeMounts,
+						},
+					},
 					Containers: []corev1.Container{
 						{
 							Name:            kubearmor,
