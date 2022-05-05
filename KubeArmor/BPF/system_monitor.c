@@ -12,8 +12,14 @@
 
 #ifdef asm_inline
 #undef asm_inline
-#define asm_inline asm
+#define __inline asm
 #endif
+
+#ifdef asm_volatile_goto
+#undef asm_volatile_goto
+#endif
+#define asm_volatile_goto(x...) asm volatile("invalid use of asm_volatile_goto")
+#pragma clang diagnostic ignored "-Wunused-label"
 
 #ifdef RHEL_RELEASE_CODE
 #if (RHEL_RELEASE_CODE >= RHEL_RELEASE_VERSION(8, 0))
