@@ -437,6 +437,11 @@ func KubeArmor() {
 
 	// == //
 
+	if !dm.K8sEnabled && cfg.GlobalCfg.Policy {
+		dm.GetAlreadyDeployedDockerContainers()
+		go dm.MonitorDockerEvents()
+	}
+
 	if dm.K8sEnabled && cfg.GlobalCfg.Policy {
 		dm.Logger.Printf("Container Runtime: %s", dm.Node.ContainerRuntimeVersion)
 
