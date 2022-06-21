@@ -96,6 +96,28 @@ func NewRuntimeEnforcer(node tp.Node, logger *fd.Feeder) *RuntimeEnforcer {
 	return nil
 }
 
+func (re *RuntimeEnforcer) RegisterContainer(containerID string, pidns, mntns uint32) {
+	// skip if runtime enforcer is not active
+	if re == nil {
+		return
+	}
+
+	if re.EnforcerType == "BPFLSM" {
+		re.bpfEnforcer.AddContainerIDToMap(containerID, pidns, mntns)
+	}
+}
+
+func (re *RuntimeEnforcer) UnregisterContainer(containerID string) {
+	// skip if runtime enforcer is not active
+	if re == nil {
+		return
+	}
+
+	if re.EnforcerType == "BPFLSM" {
+		re.bpfEnforcer.DeleteContainerIDFromMap(containerID)
+	}
+}
+
 // UpdateAppArmorProfiles Function
 func (re *RuntimeEnforcer) UpdateAppArmorProfiles(podName, action string, profiles map[string]string) {
 	// skip if runtime enforcer is not active
