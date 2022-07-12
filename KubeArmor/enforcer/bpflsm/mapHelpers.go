@@ -77,3 +77,36 @@ func (be *BPFEnforcer) DeleteContainerIDFromMap(containerID string) {
 	}
 	delete(be.ContainerMap, containerID)
 }
+
+// AddHostToMap adds host to Outer eBPF container Map for initialising enforcement tracking and initiates an InnerMap to store the host specific rules
+func (be *BPFEnforcer) AddHostToMap() {
+	key := NsKey{PidNS: 0, MntNS: 0}
+
+	be.ContainerMapLock.Lock()
+	defer be.ContainerMapLock.Unlock()
+
+	im, err := ebpf.NewMap(be.InnerMapSpec)
+	if err != nil {
+		be.Logger.Errf("error creating host policy map: %s", err)
+		return
+	}
+
+	var rules RuleList
+
+	rules.ProcessBlackList = make(map[InnerKey][8]byte)
+	rules.ProcessWhiteList = make(map[InnerKey][8]byte)
+	rules.ProcWhiteListPosture = false
+
+	rules.FileBlackList = make(map[InnerKey][8]byte)
+	rules.FileWhiteList = make(map[InnerKey][8]byte)
+	rules.FileWhiteListPosture = false
+
+	rules.NetworkBlackList = make(map[InnerKey][8]byte)
+	rules.NetworkWhiteList = make(map[InnerKey][8]byte)
+	rules.NetWhiteListPosture = false
+
+	be.ContainerMap["host"] = ContainerKV{Key: key, Map: im, Rules: rules}
+	if err := be.BPFContainerMap.Put(key, im); err != nil {
+		be.Logger.Errf("error adding host to outer map: %s", err)
+	}
+}
