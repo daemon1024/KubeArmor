@@ -338,6 +338,11 @@ func (mon *SystemMonitor) UpdateNsKeyMap(action string, nsKey NsKey, visibility 
 			return
 		}
 
+		mapFD, _ := visibilityMap.Info()
+		mapid, _ := mapFD.ID()
+
+		mon.Logger.Warnf("update visibility map. nskey=%+v, mapid=%+v", nsKey, mapid)
+
 		err = visibilityMap.Put(file.Key, file.Value)
 		if err != nil {
 			mon.Logger.Warnf("Cannot update visibility map. nskey=%+v, value=%+v, scope=file", nsKey)

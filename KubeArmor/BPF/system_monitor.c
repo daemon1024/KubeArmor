@@ -515,13 +515,17 @@ static __always_inline u32 drop_syscall(u32 scope)
     }
 
     u32 *on_off_switch = bpf_map_lookup_elem(ns_visibility, &scope);
+
+    //  nil check
     if (!on_off_switch)
     {
         return _TRACE_SYSCALL;
     }
 
-    if (*on_off_switch)
+    if (*on_off_switch){
         return _IGNORE_SYSCALL;
+    }
+    // bpf_printk("drop_syscall: %d, %d, %u, %u %s", scope, *on_off_switch, okey.pid_ns, okey.mnt_ns, task->comm);
     return _TRACE_SYSCALL;
 }
 
@@ -1169,12 +1173,24 @@ int kprobe__execve(struct pt_regs *ctx)
 SEC("kretprobe/__x64_sys_execve")
 int kretprobe__execve(struct pt_regs *ctx)
 {
+
+     struct outer_key okey;
+    struct task_struct *task = (struct task_struct *)bpf_get_current_task();
+    get_outer_key(&okey, task);
+    bpf_printk("I am alive!%u %u", okey.pid_ns, okey.mnt_ns);
+    bpf_printk("Prolly in Coma !%u %u", okey.pid_ns, okey.mnt_ns);
+
     if (skip_syscall())
+        bpf_printk("Skipping syscall %u %u", okey.pid_ns, okey.mnt_ns);
         return 0;
 
+    bpf_printk("Deadly alive !%u %u", okey.pid_ns, okey.mnt_ns);
     sys_context_t context = {};
+    bpf_printk("1 %u %u", okey.pid_ns, okey.mnt_ns);
 
     init_context(&context);
+
+    bpf_printk("2 %u %u", okey.pid_ns, okey.mnt_ns);
 
     context.event_id = _SYS_EXECVE;
     context.argnum = 0;
@@ -1184,23 +1200,32 @@ int kretprobe__execve(struct pt_regs *ctx)
     // EINPROGRESS error, happens when the socket is non-blocking and the connection cannot be completed immediately.
     if (context.retval == -2 || context.retval == -115)
     {
+        bpf_printk("Invalid rc execve syscall %u %u %d", okey.pid_ns, okey.mnt_ns, context.retval);
         return 0;
     }
 
     if (context.retval >= 0 && drop_syscall(_PROCESS_PROBE))
     {
+        bpf_printk("Dropping execve syscall %u %u %d", okey.pid_ns, okey.mnt_ns, context.retval);
         return 0;
     }
 
+    bpf_printk("3 %u %u", okey.pid_ns, okey.mnt_ns);
+
     set_buffer_offset(DATA_BUF_TYPE, sizeof(sys_context_t));
+    bpf_printk("4 %u %u", okey.pid_ns, okey.mnt_ns);
 
     bufs_t *bufs_p = get_buffer(DATA_BUF_TYPE);
     if (bufs_p == NULL)
+        bpf_printk("buffer null event skipped %u %u", okey.pid_ns, okey.mnt_ns);
         return 0;
 
+    bpf_printk("5 %u %u", okey.pid_ns, okey.mnt_ns);
     save_context_to_buffer(bufs_p, (void *)&context);
 
+    bpf_printk("6 %u %u", okey.pid_ns, okey.mnt_ns);
     events_perf_submit(ctx);
+    bpf_printk("7 Not skipped syscall event pushed %u %u %d", okey.pid_ns, okey.mnt_ns, context.retval);
 
     return 0;
 }
