@@ -1,6 +1,8 @@
 # KubeArmor
 kubearmor
 karmor
+snitch
+kubearmor-operator
 
 # KubeArmor YAML Generator
 deploygen
@@ -31,3 +33,6 @@ vmlinux.h
 **/ignore.lst
 **/syscheck
 **/cflags.lst
+
+# gingko test tmp file
+**/*.test

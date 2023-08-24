@@ -23,6 +23,9 @@ const (
 	SysSetuid = 146
 	SysSetgid = 144
 
+	SysMount  = 165
+	SysUmount = 166
+
 	SysSocket  = 198
 	SysConnect = 203
 	SysAccept  = 202
@@ -31,6 +34,8 @@ const (
 
 	SysExecve   = 221
 	SysExecveAt = 281
+
+	SysPtrace = 101
 
 	DoExit            = 351
 	SecurityBprmCheck = 352

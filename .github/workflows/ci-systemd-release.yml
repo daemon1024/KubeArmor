@@ -11,6 +11,7 @@ permissions:
 jobs:
   goreleaser:
     runs-on: ubuntu-20.04
+    if: github.repository == 'kubearmor/kubearmor'
     steps:
       - uses: actions/checkout@v3
         with:
@@ -18,17 +19,13 @@ jobs:
 
       - uses: actions/setup-go@v3
         with:
-          go-version: v1.18
+          go-version: "v1.20"
 
       - name: Install the latest LLVM toolchain
         run: ./.github/workflows/install-llvm.sh
 
       - name: Compile libbpf
         run: ./.github/workflows/install-libbpf.sh
-        
-      - name: Compile syscheck Binary
-        run: make syscheck
-        working-directory: KubeArmor/BPF/tests
 
       - name: Install karmor
         run: curl -sfL https://raw.githubusercontent.com/kubearmor/kubearmor-client/main/install.sh | sudo sh -s -- -b .
@@ -38,7 +35,7 @@ jobs:
         uses: goreleaser/goreleaser-action@v2
         with:
           distribution: goreleaser
-          version: latest
+          version: v1.12.2
           args: release --rm-dist
           workdir: KubeArmor
         env:

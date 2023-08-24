@@ -6,7 +6,6 @@ package monitor
 import (
 	"fmt"
 	"strconv"
-	"strings"
 
 	kl "github.com/kubearmor/KubeArmor/KubeArmor/common"
 	tp "github.com/kubearmor/KubeArmor/KubeArmor/types"
@@ -27,6 +26,7 @@ func (mon *SystemMonitor) UpdateContainerInfoByContainerID(log tp.Log) tp.Log {
 	if val, ok := Containers[log.ContainerID]; ok {
 		// update pod info
 		log.NamespaceName = val.NamespaceName
+		log.Owner = &val.Owner
 		log.PodName = val.EndPointName
 		log.Labels = val.Labels
 
@@ -94,25 +94,22 @@ func (mon *SystemMonitor) BuildLogBase(eventID int32, msg ContextCombined) tp.Lo
 
 // UpdateLogBase Function (SYS_EXECVE, SYS_EXECVEAT)
 func (mon *SystemMonitor) UpdateLogBase(eventID int32, log tp.Log) tp.Log {
-	if log.ParentProcessName == "" || !strings.HasPrefix(log.ParentProcessName, "/") {
-		parentProcessName := mon.GetParentExecPath(log.ContainerID, uint32(log.HostPID))
-		if parentProcessName != "" {
-			log.ParentProcessName = parentProcessName
-		}
+
+	// update the process paths, since we would have received actual exec paths from bprm hook
+
+	parentProcessName := mon.GetParentExecPath(log.ContainerID, uint32(log.HostPID))
+	if parentProcessName != "" {
+		log.ParentProcessName = parentProcessName
 	}
 
-	if log.ProcessName == "" || !strings.HasPrefix(log.ProcessName, "/") {
-		processName := mon.GetExecPath(log.ContainerID, uint32(log.HostPID))
-		if processName != "" {
-			log.ProcessName = processName
-		}
+	processName := mon.GetExecPath(log.ContainerID, uint32(log.HostPID))
+	if processName != "" {
+		log.ProcessName = processName
 	}
 
-	if log.Source == "" || !strings.HasPrefix(log.Source, "/") {
-		source := mon.GetExecPath(log.ContainerID, uint32(log.HostPPID))
-		if source != "" {
-			log.Source = source
-		}
+	source := mon.GetExecPath(log.ContainerID, uint32(log.HostPPID))
+	if source != "" {
+		log.Source = source
 	}
 
 	return log
@@ -286,6 +283,49 @@ func (mon *SystemMonitor) UpdateLogs() {
 				log.Operation = "Syscall"
 				log.Data = "syscall=" + getSyscallName(int32(msg.ContextSys.EventID)) + " userid=" + strconv.Itoa(uid)
 
+			case SysMount:
+				if len(msg.ContextArgs) != 5 {
+					continue
+				}
+				var source, target, fstype, data string
+				var flags int
+
+				if val, ok := msg.ContextArgs[0].(string); ok {
+					source = val
+				}
+				if val, ok := msg.ContextArgs[1].(string); ok {
+					target = val
+				}
+				if val, ok := msg.ContextArgs[2].(string); ok {
+					fstype = val
+				}
+				if val, ok := msg.ContextArgs[3].(int32); ok {
+					flags = int(val)
+				}
+				if val, ok := msg.ContextArgs[4].(string); ok {
+					data = val
+				}
+
+				log.Operation = "Syscall"
+				log.Data = "syscall=" + getSyscallName(int32(msg.ContextSys.EventID)) + " source=" + source + " target=" + target + " filesystem=" + fstype + " mountflag=" + strconv.Itoa(flags) + " data=" + data
+
+			case SysUmount:
+				if len(msg.ContextArgs) != 2 {
+					continue
+				}
+				var target string
+				var flags int
+
+				if val, ok := msg.ContextArgs[0].(string); ok {
+					target = val
+				}
+				if val, ok := msg.ContextArgs[1].(int32); ok {
+					flags = int(val)
+				}
+
+				log.Operation = "Syscall"
+				log.Data = "syscall=" + getSyscallName(int32(msg.ContextSys.EventID)) + " target=" + target + " flag=" + strconv.Itoa(flags)
+
 			case SysClose:
 				if len(msg.ContextArgs) != 1 {
 					continue
@@ -300,6 +340,31 @@ func (mon *SystemMonitor) UpdateLogs() {
 				log.Operation = "File"
 				log.Resource = ""
 				log.Data = "syscall=" + getSyscallName(int32(msg.ContextSys.EventID)) + " fd=" + fd
+
+			case SysPtrace:
+				if len(msg.ContextArgs) != 3 {
+					continue
+				}
+
+				var request string
+				var pid string
+				var binary string
+
+				if val, ok := msg.ContextArgs[0].(string); ok {
+					request = val
+				}
+
+				if val, ok := msg.ContextArgs[1].(int32); ok {
+					pid = strconv.Itoa(int(val))
+				}
+
+				if val, ok := msg.ContextArgs[2].(string); ok {
+					binary = val
+				}
+
+				log.Resource = binary
+				log.Operation = "Process"
+				log.Data = "syscall=" + getSyscallName(int32(msg.ContextSys.EventID)) + " request=" + request + " pid=" + pid + " process=" + binary
 
 			case SysSocket: // domain, type, proto
 				if len(msg.ContextArgs) != 3 {

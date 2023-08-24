@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2021 Authors of KubeArmor
 
+// Package feeder is responsible for sanitizing and relaying telemetry and alerts data to connected clients
 package feeder
 
 import (
@@ -8,7 +9,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
 	"net"
 	"os"
 	"path/filepath"
@@ -34,6 +34,8 @@ import (
 
 // Running flag
 var Running bool
+
+const QueueSize = 1000
 
 func init() {
 	Running = true
@@ -116,7 +118,7 @@ func (ls *LogService) removeMsgStruct(uid string) {
 // WatchMessages Function
 func (ls *LogService) WatchMessages(req *pb.RequestMessage, svr pb.LogService_WatchMessagesServer) error {
 	uid := uuid.Must(uuid.NewRandom()).String()
-	conn := make(chan *pb.Message)
+	conn := make(chan *pb.Message, QueueSize)
 	defer close(conn)
 	ls.addMsgStruct(uid, conn, req.Filter)
 	defer ls.removeMsgStruct(uid)
@@ -173,7 +175,7 @@ func (ls *LogService) WatchAlerts(req *pb.RequestMessage, svr pb.LogService_Watc
 	if req.Filter != "all" && req.Filter != "policy" {
 		return nil
 	}
-	conn := make(chan *pb.Alert)
+	conn := make(chan *pb.Alert, QueueSize)
 	defer close(conn)
 	ls.addAlertStruct(uid, conn, req.Filter)
 	defer ls.removeAlertStruct(uid)
@@ -230,7 +232,7 @@ func (ls *LogService) WatchLogs(req *pb.RequestMessage, svr pb.LogService_WatchL
 	if req.Filter != "all" && req.Filter != "system" {
 		return nil
 	}
-	conn := make(chan *pb.Log)
+	conn := make(chan *pb.Log, QueueSize)
 	defer close(conn)
 	ls.addLogStruct(uid, conn, req.Filter)
 	defer ls.removeLogStruct(uid)
@@ -264,7 +266,8 @@ func (ls *LogService) WatchLogs(req *pb.RequestMessage, svr pb.LogService_WatchL
 // Feeder Structure
 type Feeder struct {
 	// node
-	Node *tp.Node
+	Node     *tp.Node
+	NodeLock **sync.RWMutex
 
 	// port
 	Port string
@@ -298,11 +301,12 @@ type Feeder struct {
 }
 
 // NewFeeder Function
-func NewFeeder(node *tp.Node) *Feeder {
+func NewFeeder(node *tp.Node, nodeLock **sync.RWMutex) *Feeder {
 	fd := &Feeder{}
 
 	// node
 	fd.Node = node
+	fd.NodeLock = nodeLock
 
 	// gRPC configuration
 	fd.Port = fmt.Sprintf(":%s", cfg.GlobalCfg.GRPC)
@@ -385,7 +389,7 @@ func NewFeeder(node *tp.Node) *Feeder {
 
 	// check if GKE
 	if kl.IsInK8sCluster() {
-		if b, err := ioutil.ReadFile(filepath.Clean("/media/root/etc/os-release")); err == nil {
+		if b, err := os.ReadFile(filepath.Clean("/media/root/etc/os-release")); err == nil {
 			s := string(b)
 			if strings.Contains(s, "Container-Optimized OS") {
 				fd.IsGKE = true
@@ -549,11 +553,18 @@ func (fd *Feeder) PushMessage(level, message string) {
 
 	MsgLock.Lock()
 	defer MsgLock.Unlock()
-
+	counter := 0
+	lenMsg := len(MsgStructs)
 	for uid := range MsgStructs {
 		select {
 		case MsgStructs[uid].Broadcast <- &pbMsg:
 		default:
+			counter++
+			if counter == lenMsg {
+				//Default on the last uid in Messagestruct means the msg isnt pushed into Broadcast
+				kg.Printf("msg channel busy, msg dropped")
+			}
+
 		}
 	}
 }
@@ -599,6 +610,20 @@ func (fd *Feeder) PushLog(log tp.Log) {
 		pbAlert.HostName = fd.Node.NodeName
 
 		pbAlert.NamespaceName = log.NamespaceName
+
+		var owner *pb.Podowner
+		if log.Owner != nil && (log.Owner.Ref != "" || log.Owner.Name != "" || log.Owner.Namespace != "") {
+			owner = &pb.Podowner{
+				Ref:       log.Owner.Ref,
+				Name:      log.Owner.Name,
+				Namespace: log.Owner.Namespace,
+			}
+		}
+
+		if pbAlert.Owner == nil && owner != nil {
+			pbAlert.Owner = owner
+		}
+
 		pbAlert.PodName = log.PodName
 		pbAlert.Labels = log.Labels
 
@@ -654,11 +679,19 @@ func (fd *Feeder) PushLog(log tp.Log) {
 
 		AlertLock.Lock()
 		defer AlertLock.Unlock()
+		counter := 0
+		lenAlert := len(AlertStructs)
 
 		for uid := range AlertStructs {
 			select {
 			case AlertStructs[uid].Broadcast <- &pbAlert:
 			default:
+				counter++
+				if counter == lenAlert {
+					//Default on the last uid in Alterstruct means the Alert isnt pushed into Broadcast
+					kg.Printf("log channel busy, alert dropped.")
+				}
+
 			}
 		}
 	} else { // ContainerLog || HostLog
@@ -671,6 +704,20 @@ func (fd *Feeder) PushLog(log tp.Log) {
 		pbLog.HostName = fd.Node.NodeName
 
 		pbLog.NamespaceName = log.NamespaceName
+
+		var owner *pb.Podowner
+		if log.Owner != nil && (log.Owner.Ref != "" || log.Owner.Name != "" || log.Owner.Namespace != "") {
+			owner = &pb.Podowner{
+				Ref:       log.Owner.Ref,
+				Name:      log.Owner.Name,
+				Namespace: log.Owner.Namespace,
+			}
+		}
+
+		if pbLog.Owner == nil && owner != nil {
+			pbLog.Owner = owner
+		}
+
 		pbLog.PodName = log.PodName
 		pbLog.Labels = log.Labels
 
@@ -701,11 +748,17 @@ func (fd *Feeder) PushLog(log tp.Log) {
 
 		LogLock.Lock()
 		defer LogLock.Unlock()
-
+		counter := 0
+		lenlog := len(LogStructs)
 		for uid := range LogStructs {
 			select {
 			case LogStructs[uid].Broadcast <- &pbLog:
 			default:
+				counter++
+				if counter == lenlog {
+					//Default on the last uid in Logstuct means the log isnt pushed into Broadcase
+					kg.Printf("log channel busy, log dropped.")
+				}
 			}
 		}
 	}

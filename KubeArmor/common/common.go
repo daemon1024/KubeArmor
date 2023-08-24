@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2021 Authors of KubeArmor
 
+// Package common contains utility functions which are commonly used across packages and modules
 package common
 
 import (
@@ -220,8 +221,12 @@ func GetCommandOutputWithErr(cmd string, args []string) (string, error) {
 	}
 
 	go func() {
-		defer stdin.Close()
-		_, _ = io.WriteString(stdin, "values written to stdin are passed to cmd's standard input")
+		defer func() {
+			if err = stdin.Close(); err != nil {
+				kg.Warnf("Error closing stdin %s\n", err)
+			}
+		}()
+		_, err = io.WriteString(stdin, "values written to stdin are passed to cmd's standard input")
 	}()
 
 	out, err := res.CombinedOutput()
@@ -250,7 +255,11 @@ func GetCommandOutputWithoutErr(cmd string, args []string) string {
 	}
 
 	go func() {
-		defer stdin.Close()
+		defer func() {
+			if err = stdin.Close(); err != nil {
+				kg.Warnf("Error closing stdin %s\n", err)
+			}
+		}()
 		_, _ = io.WriteString(stdin, "values written to stdin are passed to cmd's standard input")
 	}()
 
@@ -370,14 +379,18 @@ func IsK8sEnv() bool {
 var ContainerRuntimeSocketMap = map[string][]string{
 	"docker": {
 		"/var/run/docker.sock",
+		"/run/docker.sock",
 	},
 	"containerd": {
 		"/var/snap/microk8s/common/run/containerd.sock",
 		"/run/k3s/containerd/containerd.sock",
+		"/run/containerd/containerd.sock",
 		"/var/run/containerd/containerd.sock",
+		"/run/dockershim.sock",
 	},
-	"crio": {
+	"cri-o": {
 		"/var/run/crio/crio.sock",
+		"/run/crio/crio.sock",
 	},
 }
 

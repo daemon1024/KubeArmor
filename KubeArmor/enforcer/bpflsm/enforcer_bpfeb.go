@@ -35,9 +35,9 @@ func loadEnforcer() (*ebpf.CollectionSpec, error) {
 //
 // The following types are suitable as obj argument:
 //
-//     *enforcerObjects
-//     *enforcerPrograms
-//     *enforcerMaps
+//	*enforcerObjects
+//	*enforcerPrograms
+//	*enforcerMaps
 //
 // See ebpf.CollectionSpec.LoadAndAssign documentation for details.
 func loadEnforcerObjects(obj interface{}, opts *ebpf.CollectionOptions) error {
@@ -65,6 +65,7 @@ type enforcerProgramSpecs struct {
 	EnforceFilePerm   *ebpf.ProgramSpec `ebpf:"enforce_file_perm"`
 	EnforceNetAccept  *ebpf.ProgramSpec `ebpf:"enforce_net_accept"`
 	EnforceNetConnect *ebpf.ProgramSpec `ebpf:"enforce_net_connect"`
+	EnforceNetCreate  *ebpf.ProgramSpec `ebpf:"enforce_net_create"`
 	EnforceProc       *ebpf.ProgramSpec `ebpf:"enforce_proc"`
 }
 
@@ -120,6 +121,7 @@ type enforcerPrograms struct {
 	EnforceFilePerm   *ebpf.Program `ebpf:"enforce_file_perm"`
 	EnforceNetAccept  *ebpf.Program `ebpf:"enforce_net_accept"`
 	EnforceNetConnect *ebpf.Program `ebpf:"enforce_net_connect"`
+	EnforceNetCreate  *ebpf.Program `ebpf:"enforce_net_create"`
 	EnforceProc       *ebpf.Program `ebpf:"enforce_proc"`
 }
 
@@ -129,6 +131,7 @@ func (p *enforcerPrograms) Close() error {
 		p.EnforceFilePerm,
 		p.EnforceNetAccept,
 		p.EnforceNetConnect,
+		p.EnforceNetCreate,
 		p.EnforceProc,
 	)
 }
@@ -143,5 +146,6 @@ func _EnforcerClose(closers ...io.Closer) error {
 }
 
 // Do not access this directly.
+//
 //go:embed enforcer_bpfeb.o
 var _EnforcerBytes []byte

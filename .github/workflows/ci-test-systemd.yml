@@ -27,7 +27,7 @@ jobs:
 
       - uses: actions/setup-go@v3
         with:
-          go-version: v1.18
+          go-version: "v1.20"
 
       - name: Install the latest LLVM toolchain
         run: ./.github/workflows/install-llvm.sh
@@ -39,6 +39,7 @@ jobs:
         uses: goreleaser/goreleaser-action@v2
         with:
           install-only: true
+          version: v1.12.2
 
       - name: Build Systemd Release
         run: make local-release

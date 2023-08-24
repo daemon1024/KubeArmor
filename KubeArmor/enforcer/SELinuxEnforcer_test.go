@@ -4,9 +4,9 @@
 package enforcer
 
 import (
-	"io/ioutil"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 
 	cfg "github.com/kubearmor/KubeArmor/KubeArmor/config"
@@ -19,7 +19,7 @@ func TestSELinuxEnforcer(t *testing.T) {
 	if _, err := os.Stat("/sys/kernel/security/lsm"); err != nil {
 		t.Log("[INFO] Unable to access /sys/kernel/security/lsm")
 	}
-	lsm, err := ioutil.ReadFile("/sys/kernel/security/lsm")
+	lsm, err := os.ReadFile("/sys/kernel/security/lsm")
 	if err != nil {
 		t.Log("[INFO] Unable to read /sys/kernel/security/lsm")
 		return
@@ -31,6 +31,7 @@ func TestSELinuxEnforcer(t *testing.T) {
 
 	// node
 	node := tp.Node{}
+	nodeLock := new(sync.RWMutex)
 
 	// load configuration
 	if err := cfg.LoadConfig(); err != nil {
@@ -43,7 +44,7 @@ func TestSELinuxEnforcer(t *testing.T) {
 	cfg.GlobalCfg.HostPolicy = true
 
 	// create logger
-	logger := feeder.NewFeeder(&node)
+	logger := feeder.NewFeeder(&node, &nodeLock)
 	if logger == nil {
 		t.Log("[FAIL] Failed to create logger")
 		return
@@ -90,7 +91,7 @@ func TestSELinuxProfile(t *testing.T) {
 	if _, err := os.Stat("/sys/kernel/security/lsm"); err != nil {
 		t.Log("[INFO] Unable to access /sys/kernel/security/lsm")
 	}
-	lsm, err := ioutil.ReadFile("/sys/kernel/security/lsm")
+	lsm, err := os.ReadFile("/sys/kernel/security/lsm")
 	if err != nil {
 		t.Log("[INFO] Unable to read /sys/kernel/security/lsm")
 		return
@@ -102,13 +103,14 @@ func TestSELinuxProfile(t *testing.T) {
 
 	// node
 	node := tp.Node{}
+	nodeLock := new(sync.RWMutex)
 
 	// configuration
 	cfg.GlobalCfg.Policy = true
 	cfg.GlobalCfg.HostPolicy = false
 
 	// create logger
-	logger := feeder.NewFeeder(&node)
+	logger := feeder.NewFeeder(&node, &nodeLock)
 	if logger == nil {
 		t.Log("[FAIL] Failed to create logger")
 		return
@@ -155,7 +157,7 @@ func TestSELinuxHostProfile(t *testing.T) {
 	if _, err := os.Stat("/sys/kernel/security/lsm"); err != nil {
 		t.Log("[INFO] Unable to access /sys/kernel/security/lsm")
 	}
-	lsm, err := ioutil.ReadFile("/sys/kernel/security/lsm")
+	lsm, err := os.ReadFile("/sys/kernel/security/lsm")
 	if err != nil {
 		t.Log("[INFO] Unable to read /sys/kernel/security/lsm")
 		return
@@ -167,13 +169,14 @@ func TestSELinuxHostProfile(t *testing.T) {
 
 	// node
 	node := tp.Node{}
+	nodeLock := new(sync.RWMutex)
 
 	// configuration
 	cfg.GlobalCfg.Policy = false
 	cfg.GlobalCfg.HostPolicy = true
 
 	// create logger
-	logger := feeder.NewFeeder(&node)
+	logger := feeder.NewFeeder(&node, &nodeLock)
 	if logger == nil {
 		t.Log("[FAIL] Failed to create logger")
 		return

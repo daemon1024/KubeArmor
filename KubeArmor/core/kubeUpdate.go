@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"os"
 	"sort"
 	"strings"
@@ -17,7 +16,10 @@ import (
 	kl "github.com/kubearmor/KubeArmor/KubeArmor/common"
 	cfg "github.com/kubearmor/KubeArmor/KubeArmor/config"
 	kg "github.com/kubearmor/KubeArmor/KubeArmor/log"
+	"github.com/kubearmor/KubeArmor/KubeArmor/monitor"
 	tp "github.com/kubearmor/KubeArmor/KubeArmor/types"
+	ksp "github.com/kubearmor/KubeArmor/pkg/KubeArmorController/api/security.kubearmor.com/v1"
+	kspinformer "github.com/kubearmor/KubeArmor/pkg/KubeArmorController/client/informers/externalversions"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/wait"
@@ -39,7 +41,7 @@ func (dm *KubeArmorDaemon) HandleNodeAnnotations(node *tp.Node) {
 		node.Annotations["kubearmor-policy"] = "enabled"
 	}
 
-	if lsm, err := ioutil.ReadFile("/sys/kernel/security/lsm"); err == nil {
+	if lsm, err := os.ReadFile("/sys/kernel/security/lsm"); err == nil {
 		if !strings.Contains(string(lsm), "apparmor") && !strings.Contains(string(lsm), "selinux") {
 			// exception: neither AppArmor nor SELinux
 			if node.Annotations["kubearmor-policy"] == "enabled" {
@@ -89,83 +91,87 @@ func matchHost(hostName string) bool {
 	return nodeName == cfg.GlobalCfg.Host
 }
 
+func (dm *KubeArmorDaemon) checkAndUpdateNode(item *corev1.Node) {
+	if !matchHost(item.Name) {
+		return
+	}
+
+	node := tp.Node{}
+
+	node.ClusterName = cfg.GlobalCfg.Cluster
+	node.NodeName = cfg.GlobalCfg.Host
+
+	for _, address := range item.Status.Addresses {
+		if address.Type == "InternalIP" {
+			node.NodeIP = address.Address
+			break
+		}
+	}
+
+	node.Annotations = map[string]string{}
+	node.Labels = map[string]string{}
+	node.Identities = []string{}
+
+	// update annotations
+	for k, v := range item.ObjectMeta.Annotations {
+		node.Annotations[k] = v
+	}
+
+	// update labels and identities
+	for k, v := range item.ObjectMeta.Labels {
+		node.Labels[k] = v
+		node.Identities = append(node.Identities, k+"="+v)
+	}
+
+	sort.Slice(node.Identities, func(i, j int) bool {
+		return node.Identities[i] < node.Identities[j]
+	})
+
+	// node info
+	node.Architecture = item.Status.NodeInfo.Architecture
+	node.OperatingSystem = item.Status.NodeInfo.OperatingSystem
+	node.OSImage = item.Status.NodeInfo.OSImage
+	node.KernelVersion = item.Status.NodeInfo.KernelVersion
+	node.KubeletVersion = item.Status.NodeInfo.KubeletVersion
+
+	// container runtime
+	node.ContainerRuntimeVersion = item.Status.NodeInfo.ContainerRuntimeVersion
+
+	dm.HandleNodeAnnotations(&node)
+
+	// update node info
+	dm.NodeLock.Lock()
+	dm.Node = node
+	dm.NodeLock.Unlock()
+}
+
 // WatchK8sNodes Function
 func (dm *KubeArmorDaemon) WatchK8sNodes() {
 	kg.Printf("GlobalCfg.Host=%s, KUBEARMOR_NODENAME=%s", cfg.GlobalCfg.Host, os.Getenv("KUBEARMOR_NODENAME"))
-	for {
-		if resp := K8s.WatchK8sNodes(); resp != nil {
-			defer resp.Body.Close()
 
-			decoder := json.NewDecoder(resp.Body)
-			for {
-				event := tp.K8sNodeEvent{}
-				if err := decoder.Decode(&event); err == io.EOF {
-					break
-				} else if err != nil {
-					break
-				}
+	factory := informers.NewSharedInformerFactory(K8s.K8sClient, 0)
+	informer := factory.Core().V1().Nodes().Informer()
 
-				// Kubearmor uses hostname to get the corresponding node information, but there are exceptions.
-				// For example, the node name on EKS can be of the format <hostname>.<region>.compute.internal
-				/* Keeping this past code for near-future ref purpose. Jun-13-2022
-				nodeName := strings.Split(event.Object.ObjectMeta.Name, ".")[0]
-				if nodeName != cfg.GlobalCfg.Host {
-					continue
-				}
-				*/
-				if !matchHost(event.Object.ObjectMeta.Name) {
-					continue
-				}
-
-				node := tp.Node{}
-
-				node.ClusterName = cfg.GlobalCfg.Cluster
-				node.NodeName = cfg.GlobalCfg.Host
-
-				for _, address := range event.Object.Status.Addresses {
-					if address.Type == "InternalIP" {
-						node.NodeIP = address.Address
-						break
-					}
-				}
-
-				node.Annotations = map[string]string{}
-				node.Labels = map[string]string{}
-				node.Identities = []string{}
-
-				// update annotations
-				for k, v := range event.Object.ObjectMeta.Annotations {
-					node.Annotations[k] = v
-				}
-
-				// update labels and identities
-				for k, v := range event.Object.ObjectMeta.Labels {
-					node.Labels[k] = v
-					node.Identities = append(node.Identities, k+"="+v)
-				}
-
-				sort.Slice(node.Identities, func(i, j int) bool {
-					return node.Identities[i] < node.Identities[j]
-				})
-
-				// node info
-				node.Architecture = event.Object.Status.NodeInfo.Architecture
-				node.OperatingSystem = event.Object.Status.NodeInfo.OperatingSystem
-				node.OSImage = event.Object.Status.NodeInfo.OSImage
-				node.KernelVersion = event.Object.Status.NodeInfo.KernelVersion
-				node.KubeletVersion = event.Object.Status.NodeInfo.KubeletVersion
-
-				// container runtime
-				node.ContainerRuntimeVersion = event.Object.Status.NodeInfo.ContainerRuntimeVersion
-
-				dm.HandleNodeAnnotations(&node)
-
-				dm.Node = node
+	if _, err := informer.AddEventHandler(cache.ResourceEventHandlerFuncs{
+		AddFunc: func(obj interface{}) {
+			if item, ok := obj.(*corev1.Node); ok {
+				dm.checkAndUpdateNode(item)
 			}
-		} else {
-			time.Sleep(time.Second * 1)
-		}
+		},
+		UpdateFunc: func(oldObj, newObj interface{}) {
+			if item, ok := newObj.(*corev1.Node); ok {
+				dm.checkAndUpdateNode(item)
+			}
+		},
+	}); err != nil {
+		kg.Err("Couldn't Start Watching node information")
+		return
 	}
+
+	go factory.Start(wait.NeverStop)
+	factory.WaitForCacheSync(wait.NeverStop)
+	kg.Print("Started watching node information")
+
 }
 
 // ================ //
@@ -180,6 +186,9 @@ func (dm *KubeArmorDaemon) UpdateEndPointWithPod(action string, pod tp.K8sPod) {
 
 		newPoint.NamespaceName = pod.Metadata["namespaceName"]
 		newPoint.EndPointName = pod.Metadata["podName"]
+		newPoint.Owner.Ref = pod.Metadata["owner.controller"]
+		newPoint.Owner.Name = pod.Metadata["owner.controllerName"]
+		newPoint.Owner.Namespace = pod.Metadata["owner.namespace"]
 
 		newPoint.Labels = map[string]string{}
 		newPoint.Identities = []string{"namespaceName=" + pod.Metadata["namespaceName"]}
@@ -232,6 +241,9 @@ func (dm *KubeArmorDaemon) UpdateEndPointWithPod(action string, pod tp.K8sPod) {
 			container := dm.Containers[containerID]
 
 			container.NamespaceName = newPoint.NamespaceName
+			container.Owner.Ref = newPoint.Owner.Ref
+			container.Owner.Name = newPoint.Owner.Name
+			container.Owner.Namespace = newPoint.Owner.Namespace
 			container.EndPointName = newPoint.EndPointName
 
 			labels := []string{}
@@ -268,7 +280,6 @@ func (dm *KubeArmorDaemon) UpdateEndPointWithPod(action string, pod tp.K8sPod) {
 				NetworkAction:      cfg.GlobalCfg.DefaultNetworkPosture,
 				CapabilitiesAction: cfg.GlobalCfg.DefaultCapabilitiesPosture,
 			}
-			dm.DefaultPostures[newPoint.NamespaceName] = globalDefaultPosture
 			newPoint.DefaultPosture = globalDefaultPosture
 		}
 		dm.DefaultPosturesLock.Unlock()
@@ -330,6 +341,8 @@ func (dm *KubeArmorDaemon) UpdateEndPointWithPod(action string, pod tp.K8sPod) {
 			dm.UpdateEndPointWithPod("ADDED", pod)
 
 		} else {
+			newEndPoint.NamespaceName = pod.Metadata["namespaceName"]
+			newEndPoint.EndPointName = pod.Metadata["podName"]
 			newEndPoint.Labels = map[string]string{}
 			newEndPoint.Identities = []string{"namespaceName=" + pod.Metadata["namespaceName"]}
 
@@ -387,6 +400,9 @@ func (dm *KubeArmorDaemon) UpdateEndPointWithPod(action string, pod tp.K8sPod) {
 				container := dm.Containers[containerID]
 
 				container.NamespaceName = newEndPoint.NamespaceName
+				container.Owner.Ref = newEndPoint.Owner.Ref
+				container.Owner.Name = newEndPoint.Owner.Name
+				container.Owner.Namespace = newEndPoint.Owner.Namespace
 				container.EndPointName = newEndPoint.EndPointName
 
 				labels := []string{}
@@ -423,7 +439,6 @@ func (dm *KubeArmorDaemon) UpdateEndPointWithPod(action string, pod tp.K8sPod) {
 					NetworkAction:      cfg.GlobalCfg.DefaultNetworkPosture,
 					CapabilitiesAction: cfg.GlobalCfg.DefaultCapabilitiesPosture,
 				}
-				dm.DefaultPostures[newEndPoint.NamespaceName] = globalDefaultPosture
 				newEndPoint.DefaultPosture = globalDefaultPosture
 			}
 			dm.DefaultPosturesLock.Unlock()
@@ -498,7 +513,11 @@ func (dm *KubeArmorDaemon) UpdateEndPointWithPod(action string, pod tp.K8sPod) {
 func (dm *KubeArmorDaemon) WatchK8sPods() {
 	for {
 		if resp := K8s.WatchK8sPods(); resp != nil {
-			defer resp.Body.Close()
+			defer func() {
+				if err := resp.Body.Close(); err != nil {
+					kg.Warnf("Error closing http stream %s\n", err)
+				}
+			}()
 
 			decoder := json.NewDecoder(resp.Body)
 			for {
@@ -525,21 +544,18 @@ func (dm *KubeArmorDaemon) WatchK8sPods() {
 				pod.Metadata["namespaceName"] = event.Object.ObjectMeta.Namespace
 				pod.Metadata["podName"] = event.Object.ObjectMeta.Name
 
-				ownerRef := kl.GetControllingPodOwner(event.Object.ObjectMeta.OwnerReferences)
-				if ownerRef != nil {
-					podOwnerName = ownerRef.Name
-					if ownerRef.Kind == "ReplicaSet" {
-						deploymentName := K8s.GetDeploymentNameControllingReplicaSet(pod.Metadata["namespaceName"], podOwnerName)
-						if deploymentName != "" {
-							pod.Metadata["deploymentName"] = deploymentName
-						}
-						// if it belongs to a replicaset, we also remove the pod template hash
-						podOwnerName = strings.TrimSuffix(podOwnerName, fmt.Sprintf("-%s", event.Object.ObjectMeta.Labels["pod-template-hash"]))
-					}
-				} else {
-					// static pod
-					podOwnerName = event.Object.ObjectMeta.Name
+				controllerName, controller, namespace, err := getTopLevelOwner(event.Object.ObjectMeta, event.Object.Namespace, event.Object.Kind)
+				if err != nil {
+					dm.Logger.Errf("Failed to get ownerRef (%s, %s)", event.Object.ObjectMeta.Name, err.Error())
+
 				}
+
+				podOwnerName = controllerName
+				pod.Metadata["owner.controllerName"] = controllerName
+				pod.Metadata["owner.controller"] = controller
+				pod.Metadata["owner.namespace"] = namespace
+
+				//get the owner , then check if that owner has owner if...do it recusivelt until you get the no owner
 
 				pod.Annotations = map[string]string{}
 				for k, v := range event.Object.Annotations {
@@ -654,13 +670,46 @@ func (dm *KubeArmorDaemon) WatchK8sPods() {
 					appArmorAnnotations := map[string]string{}
 					updateAppArmor := false
 
-					if deploymentName, ok := pod.Metadata["deploymentName"]; ok {
-						deploy, err := K8s.K8sClient.AppsV1().Deployments(pod.Metadata["namespaceName"]).Get(context.Background(), deploymentName, metav1.GetOptions{})
-						if err == nil {
-							for _, c := range deploy.Spec.Template.Spec.Containers {
-								containers = append(containers, c.Name)
+					if _, ok := pod.Metadata["owner.controllerName"]; ok {
+						if pod.Metadata["owner.controller"] == "StatefulSet" {
+							statefulset, err := K8s.K8sClient.AppsV1().StatefulSets(pod.Metadata["namespaceName"]).Get(context.Background(), podOwnerName, metav1.GetOptions{})
+							if err == nil {
+								for _, c := range statefulset.Spec.Template.Spec.Containers {
+									containers = append(containers, c.Name)
+								}
 							}
+						} else if pod.Metadata["owner.controller"] == "ReplicaSet" {
+							replica, err := K8s.K8sClient.AppsV1().ReplicaSets(pod.Metadata["namespaceName"]).Get(context.Background(), podOwnerName, metav1.GetOptions{})
+							if err == nil {
+								for _, c := range replica.Spec.Template.Spec.Containers {
+									containers = append(containers, c.Name)
+								}
+							}
+
+						} else if pod.Metadata["owner.controller"] == "DaemonSet" {
+							daemon, err := K8s.K8sClient.AppsV1().DaemonSets(pod.Metadata["namespaceName"]).Get(context.Background(), podOwnerName, metav1.GetOptions{})
+							if err == nil {
+								for _, c := range daemon.Spec.Template.Spec.Containers {
+									containers = append(containers, c.Name)
+								}
+							}
+						} else if pod.Metadata["owner.controller"] == "Deployment" {
+							deploy, err := K8s.K8sClient.AppsV1().Deployments(pod.Metadata["namespaceName"]).Get(context.Background(), podOwnerName, metav1.GetOptions{})
+							if err == nil {
+								for _, c := range deploy.Spec.Template.Spec.Containers {
+									containers = append(containers, c.Name)
+								}
+							}
+						} else if pod.Metadata["owner.controller"] == "Pod" {
+							pod, err := K8s.K8sClient.CoreV1().Pods("default").Get(context.Background(), "my-pod", metav1.GetOptions{})
+							if err == nil {
+								for _, c := range pod.Spec.Containers {
+									containers = append(containers, c.Name)
+								}
+							}
+
 						}
+
 					}
 
 					for k, v := range pod.Annotations {
@@ -687,9 +736,9 @@ func (dm *KubeArmorDaemon) WatchK8sPods() {
 						dm.RuntimeEnforcer.UpdateAppArmorProfiles(pod.Metadata["podName"], "ADDED", appArmorAnnotations)
 
 						if updateAppArmor && pod.Annotations["kubearmor-policy"] == "enabled" {
-							if deploymentName, ok := pod.Metadata["deploymentName"]; ok {
+							if deploymentName, ok := pod.Metadata["owner.controllerName"]; ok {
 								// patch the deployment with apparmor annotations
-								if err := K8s.PatchDeploymentWithAppArmorAnnotations(pod.Metadata["namespaceName"], deploymentName, appArmorAnnotations); err != nil {
+								if err := K8s.PatchResourceWithAppArmorAnnotations(pod.Metadata["namespaceName"], deploymentName, appArmorAnnotations, pod.Metadata["owner.controller"]); err != nil {
 									dm.Logger.Errf("Failed to update AppArmor Annotations (%s/%s/%s, %s)", pod.Metadata["namespaceName"], deploymentName, pod.Metadata["podName"], err.Error())
 								} else {
 									dm.Logger.Printf("Patched AppArmor Annotations (%s/%s/%s)", pod.Metadata["namespaceName"], deploymentName, pod.Metadata["podName"])
@@ -707,9 +756,9 @@ func (dm *KubeArmorDaemon) WatchK8sPods() {
 								}
 
 								if updateAppArmor && prevPolicyEnabled != "enabled" && pod.Annotations["kubearmor-policy"] == "enabled" {
-									if deploymentName, ok := pod.Metadata["deploymentName"]; ok {
+									if deploymentName, ok := pod.Metadata["owner.controllerName"]; ok {
 										// patch the deployment with apparmor annotations
-										if err := K8s.PatchDeploymentWithAppArmorAnnotations(pod.Metadata["namespaceName"], deploymentName, appArmorAnnotations); err != nil {
+										if err := K8s.PatchResourceWithAppArmorAnnotations(pod.Metadata["namespaceName"], deploymentName, appArmorAnnotations, pod.Metadata["owner.controller"]); err != nil {
 											dm.Logger.Errf("Failed to update AppArmor Annotations (%s/%s/%s, %s)", pod.Metadata["namespaceName"], deploymentName, pod.Metadata["podName"], err.Error())
 										} else {
 											dm.Logger.Printf("Patched AppArmor Annotations (%s/%s/%s)", pod.Metadata["namespaceName"], deploymentName, pod.Metadata["podName"])
@@ -850,496 +899,15 @@ func (dm *KubeArmorDaemon) UpdateSecurityPolicy(action string, secPolicy tp.Secu
 	}
 }
 
-// WatchSecurityPolicies Function
-func (dm *KubeArmorDaemon) WatchSecurityPolicies() {
-	for {
-		if !K8s.CheckCustomResourceDefinition("kubearmorpolicies") {
-			time.Sleep(time.Second * 1)
-			continue
-		}
-
-		if resp := K8s.WatchK8sSecurityPolicies(); resp != nil {
-			defer resp.Body.Close()
-
-			decoder := json.NewDecoder(resp.Body)
-			for {
-				event := tp.K8sKubeArmorPolicyEvent{}
-				if err := decoder.Decode(&event); err == io.EOF {
-					break
-				} else if err != nil {
-					break
-				}
-
-				if event.Object.Status.Status != "" && event.Object.Status.Status != "OK" {
-					continue
-				}
-
-				if event.Type != "ADDED" && event.Type != "MODIFIED" && event.Type != "DELETED" {
-					continue
-				}
-
-				// create a security policy
-
-				secPolicy := tp.SecurityPolicy{}
-
-				secPolicy.Metadata = map[string]string{}
-				secPolicy.Metadata["namespaceName"] = event.Object.Metadata.Namespace
-				secPolicy.Metadata["policyName"] = event.Object.Metadata.Name
-
-				if err := kl.Clone(event.Object.Spec, &secPolicy.Spec); err != nil {
-					dm.Logger.Errf("Failed to clone a spec (%s)", err.Error())
-					continue
-				}
-
-				kl.ObjCommaExpandFirstDupOthers(&secPolicy.Spec.Network.MatchProtocols)
-				kl.ObjCommaExpandFirstDupOthers(&secPolicy.Spec.Capabilities.MatchCapabilities)
-
-				if secPolicy.Spec.Severity == 0 {
-					secPolicy.Spec.Severity = 1 // the lowest severity, by default
-				}
-
-				switch secPolicy.Spec.Action {
-				case "allow":
-					secPolicy.Spec.Action = "Allow"
-				case "audit":
-					secPolicy.Spec.Action = "Audit"
-				case "block":
-					secPolicy.Spec.Action = "Block"
-				case "":
-					secPolicy.Spec.Action = "Block" // by default
-				}
-
-				// add identities
-
-				secPolicy.Spec.Selector.Identities = []string{"namespaceName=" + event.Object.Metadata.Namespace}
-
-				for k, v := range secPolicy.Spec.Selector.MatchLabels {
-					if k == "kubearmor.io/container.name" {
-						if len(v) > 2 {
-							containerArray := v[1 : len(v)-1]
-							containers := strings.Split(containerArray, ",")
-							for _, container := range containers {
-								if len(container) > 0 {
-									secPolicy.Spec.Selector.Containers = append(secPolicy.Spec.Selector.Containers, strings.TrimSpace(container))
-								}
-
-							}
-						}
-					} else {
-						secPolicy.Spec.Selector.Identities = append(secPolicy.Spec.Selector.Identities, k+"="+v)
-					}
-				}
-
-				sort.Slice(secPolicy.Spec.Selector.Identities, func(i, j int) bool {
-					return secPolicy.Spec.Selector.Identities[i] < secPolicy.Spec.Selector.Identities[j]
-				})
-
-				// add severities, tags, messages, and actions
-
-				if len(secPolicy.Spec.Process.MatchPaths) > 0 {
-					for idx, path := range secPolicy.Spec.Process.MatchPaths {
-						if path.Severity == 0 {
-							if secPolicy.Spec.Process.Severity != 0 {
-								secPolicy.Spec.Process.MatchPaths[idx].Severity = secPolicy.Spec.Process.Severity
-							} else {
-								secPolicy.Spec.Process.MatchPaths[idx].Severity = secPolicy.Spec.Severity
-							}
-						}
-
-						if len(path.Tags) == 0 {
-							if len(secPolicy.Spec.Process.Tags) > 0 {
-								secPolicy.Spec.Process.MatchPaths[idx].Tags = secPolicy.Spec.Process.Tags
-							} else {
-								secPolicy.Spec.Process.MatchPaths[idx].Tags = secPolicy.Spec.Tags
-							}
-						}
-
-						if len(path.Message) == 0 {
-							if len(secPolicy.Spec.Process.Message) > 0 {
-								secPolicy.Spec.Process.MatchPaths[idx].Message = secPolicy.Spec.Process.Message
-							} else {
-								secPolicy.Spec.Process.MatchPaths[idx].Message = secPolicy.Spec.Message
-							}
-						}
-
-						if len(path.Action) == 0 {
-							if len(secPolicy.Spec.Process.Action) > 0 {
-								secPolicy.Spec.Process.MatchPaths[idx].Action = secPolicy.Spec.Process.Action
-							} else {
-								secPolicy.Spec.Process.MatchPaths[idx].Action = secPolicy.Spec.Action
-							}
-						}
-					}
-				}
-
-				if len(secPolicy.Spec.Process.MatchDirectories) > 0 {
-					for idx, dir := range secPolicy.Spec.Process.MatchDirectories {
-						if dir.Severity == 0 {
-							if secPolicy.Spec.Process.Severity != 0 {
-								secPolicy.Spec.Process.MatchDirectories[idx].Severity = secPolicy.Spec.Process.Severity
-							} else {
-								secPolicy.Spec.Process.MatchDirectories[idx].Severity = secPolicy.Spec.Severity
-							}
-						}
-
-						if len(dir.Tags) == 0 {
-							if len(secPolicy.Spec.Process.Tags) > 0 {
-								secPolicy.Spec.Process.MatchDirectories[idx].Tags = secPolicy.Spec.Process.Tags
-							} else {
-								secPolicy.Spec.Process.MatchDirectories[idx].Tags = secPolicy.Spec.Tags
-							}
-						}
-
-						if len(dir.Message) == 0 {
-							if len(secPolicy.Spec.Process.Message) > 0 {
-								secPolicy.Spec.Process.MatchDirectories[idx].Message = secPolicy.Spec.Process.Message
-							} else {
-								secPolicy.Spec.Process.MatchDirectories[idx].Message = secPolicy.Spec.Message
-							}
-						}
-
-						if len(dir.Action) == 0 {
-							if len(secPolicy.Spec.Process.Action) > 0 {
-								secPolicy.Spec.Process.MatchDirectories[idx].Action = secPolicy.Spec.Process.Action
-							} else {
-								secPolicy.Spec.Process.MatchDirectories[idx].Action = secPolicy.Spec.Action
-							}
-						}
-					}
-				}
-
-				if len(secPolicy.Spec.Process.MatchPatterns) > 0 {
-					for idx, pat := range secPolicy.Spec.Process.MatchPatterns {
-						if pat.Severity == 0 {
-							if secPolicy.Spec.Process.Severity != 0 {
-								secPolicy.Spec.Process.MatchPatterns[idx].Severity = secPolicy.Spec.Process.Severity
-							} else {
-								secPolicy.Spec.Process.MatchPatterns[idx].Severity = secPolicy.Spec.Severity
-							}
-						}
-
-						if len(pat.Tags) == 0 {
-							if len(secPolicy.Spec.Process.Tags) > 0 {
-								secPolicy.Spec.Process.MatchPatterns[idx].Tags = secPolicy.Spec.Process.Tags
-							} else {
-								secPolicy.Spec.Process.MatchPatterns[idx].Tags = secPolicy.Spec.Tags
-							}
-						}
-
-						if len(pat.Message) == 0 {
-							if len(secPolicy.Spec.Process.Message) > 0 {
-								secPolicy.Spec.Process.MatchPatterns[idx].Message = secPolicy.Spec.Process.Message
-							} else {
-								secPolicy.Spec.Process.MatchPatterns[idx].Message = secPolicy.Spec.Message
-							}
-						}
-
-						if len(pat.Action) == 0 {
-							if len(secPolicy.Spec.Process.Action) > 0 {
-								secPolicy.Spec.Process.MatchPatterns[idx].Action = secPolicy.Spec.Process.Action
-							} else {
-								secPolicy.Spec.Process.MatchPatterns[idx].Action = secPolicy.Spec.Action
-							}
-						}
-					}
-				}
-
-				if len(secPolicy.Spec.File.MatchPaths) > 0 {
-					for idx, path := range secPolicy.Spec.File.MatchPaths {
-						if path.Severity == 0 {
-							if secPolicy.Spec.File.Severity != 0 {
-								secPolicy.Spec.File.MatchPaths[idx].Severity = secPolicy.Spec.File.Severity
-							} else {
-								secPolicy.Spec.File.MatchPaths[idx].Severity = secPolicy.Spec.Severity
-							}
-						}
-
-						if len(path.Tags) == 0 {
-							if len(secPolicy.Spec.File.Tags) > 0 {
-								secPolicy.Spec.File.MatchPaths[idx].Tags = secPolicy.Spec.File.Tags
-							} else {
-								secPolicy.Spec.File.MatchPaths[idx].Tags = secPolicy.Spec.Tags
-							}
-						}
-
-						if len(path.Message) == 0 {
-							if len(secPolicy.Spec.File.Message) > 0 {
-								secPolicy.Spec.File.MatchPaths[idx].Message = secPolicy.Spec.File.Message
-							} else {
-								secPolicy.Spec.File.MatchPaths[idx].Message = secPolicy.Spec.Message
-							}
-						}
-
-						if len(path.Action) == 0 {
-							if len(secPolicy.Spec.File.Action) > 0 {
-								secPolicy.Spec.File.MatchPaths[idx].Action = secPolicy.Spec.File.Action
-							} else {
-								secPolicy.Spec.File.MatchPaths[idx].Action = secPolicy.Spec.Action
-							}
-						}
-					}
-				}
-
-				if len(secPolicy.Spec.File.MatchDirectories) > 0 {
-					for idx, dir := range secPolicy.Spec.File.MatchDirectories {
-						if dir.Severity == 0 {
-							if secPolicy.Spec.File.Severity != 0 {
-								secPolicy.Spec.File.MatchDirectories[idx].Severity = secPolicy.Spec.File.Severity
-							} else {
-								secPolicy.Spec.File.MatchDirectories[idx].Severity = secPolicy.Spec.Severity
-							}
-						}
-
-						if len(dir.Tags) == 0 {
-							if len(secPolicy.Spec.File.Tags) > 0 {
-								secPolicy.Spec.File.MatchDirectories[idx].Tags = secPolicy.Spec.File.Tags
-							} else {
-								secPolicy.Spec.File.MatchDirectories[idx].Tags = secPolicy.Spec.Tags
-							}
-						}
-
-						if len(dir.Message) == 0 {
-							if len(secPolicy.Spec.File.Message) > 0 {
-								secPolicy.Spec.File.MatchDirectories[idx].Message = secPolicy.Spec.File.Message
-							} else {
-								secPolicy.Spec.File.MatchDirectories[idx].Message = secPolicy.Spec.Message
-							}
-						}
-
-						if len(dir.Action) == 0 {
-							if len(secPolicy.Spec.File.Action) > 0 {
-								secPolicy.Spec.File.MatchDirectories[idx].Action = secPolicy.Spec.File.Action
-							} else {
-								secPolicy.Spec.File.MatchDirectories[idx].Action = secPolicy.Spec.Action
-							}
-						}
-					}
-				}
-
-				if len(secPolicy.Spec.File.MatchPatterns) > 0 {
-					for idx, pat := range secPolicy.Spec.File.MatchPatterns {
-						if pat.Severity == 0 {
-							if secPolicy.Spec.File.Severity != 0 {
-								secPolicy.Spec.File.MatchPatterns[idx].Severity = secPolicy.Spec.File.Severity
-							} else {
-								secPolicy.Spec.File.MatchPatterns[idx].Severity = secPolicy.Spec.Severity
-							}
-						}
-
-						if len(pat.Tags) == 0 {
-							if len(secPolicy.Spec.File.Tags) > 0 {
-								secPolicy.Spec.File.MatchPatterns[idx].Tags = secPolicy.Spec.File.Tags
-							} else {
-								secPolicy.Spec.File.MatchPatterns[idx].Tags = secPolicy.Spec.Tags
-							}
-						}
-
-						if len(pat.Message) == 0 {
-							if len(secPolicy.Spec.File.Message) > 0 {
-								secPolicy.Spec.File.MatchPatterns[idx].Message = secPolicy.Spec.File.Message
-							} else {
-								secPolicy.Spec.File.MatchPatterns[idx].Message = secPolicy.Spec.Message
-							}
-						}
-
-						if len(pat.Action) == 0 {
-							if len(secPolicy.Spec.File.Action) > 0 {
-								secPolicy.Spec.File.MatchPatterns[idx].Action = secPolicy.Spec.File.Action
-							} else {
-								secPolicy.Spec.File.MatchPatterns[idx].Action = secPolicy.Spec.Action
-							}
-						}
-					}
-				}
-
-				if len(secPolicy.Spec.Network.MatchProtocols) > 0 {
-					for idx, proto := range secPolicy.Spec.Network.MatchProtocols {
-						if proto.Severity == 0 {
-							if secPolicy.Spec.Network.Severity != 0 {
-								secPolicy.Spec.Network.MatchProtocols[idx].Severity = secPolicy.Spec.Network.Severity
-							} else {
-								secPolicy.Spec.Network.MatchProtocols[idx].Severity = secPolicy.Spec.Severity
-							}
-						}
-
-						if len(proto.Tags) == 0 {
-							if len(secPolicy.Spec.Network.Tags) > 0 {
-								secPolicy.Spec.Network.MatchProtocols[idx].Tags = secPolicy.Spec.Network.Tags
-							} else {
-								secPolicy.Spec.Network.MatchProtocols[idx].Tags = secPolicy.Spec.Tags
-							}
-						}
-
-						if len(proto.Message) == 0 {
-							if len(secPolicy.Spec.Network.Message) > 0 {
-								secPolicy.Spec.Network.MatchProtocols[idx].Message = secPolicy.Spec.Network.Message
-							} else {
-								secPolicy.Spec.Network.MatchProtocols[idx].Message = secPolicy.Spec.Message
-							}
-						}
-
-						if len(proto.Action) == 0 {
-							if len(secPolicy.Spec.Network.Action) > 0 {
-								secPolicy.Spec.Network.MatchProtocols[idx].Action = secPolicy.Spec.Network.Action
-							} else {
-								secPolicy.Spec.Network.MatchProtocols[idx].Action = secPolicy.Spec.Action
-							}
-						}
-					}
-				}
-
-				if len(secPolicy.Spec.Capabilities.MatchCapabilities) > 0 {
-					for idx, cap := range secPolicy.Spec.Capabilities.MatchCapabilities {
-						if cap.Severity == 0 {
-							if secPolicy.Spec.Capabilities.Severity != 0 {
-								secPolicy.Spec.Capabilities.MatchCapabilities[idx].Severity = secPolicy.Spec.Capabilities.Severity
-							} else {
-								secPolicy.Spec.Capabilities.MatchCapabilities[idx].Severity = secPolicy.Spec.Severity
-							}
-						}
-
-						if len(cap.Tags) == 0 {
-							if len(secPolicy.Spec.Capabilities.Tags) > 0 {
-								secPolicy.Spec.Capabilities.MatchCapabilities[idx].Tags = secPolicy.Spec.Capabilities.Tags
-							} else {
-								secPolicy.Spec.Capabilities.MatchCapabilities[idx].Tags = secPolicy.Spec.Tags
-							}
-						}
-
-						if len(cap.Message) == 0 {
-							if len(secPolicy.Spec.Capabilities.Message) > 0 {
-								secPolicy.Spec.Capabilities.MatchCapabilities[idx].Message = secPolicy.Spec.Capabilities.Message
-							} else {
-								secPolicy.Spec.Capabilities.MatchCapabilities[idx].Message = secPolicy.Spec.Message
-							}
-						}
-
-						if len(cap.Action) == 0 {
-							if len(secPolicy.Spec.Capabilities.Action) > 0 {
-								secPolicy.Spec.Capabilities.MatchCapabilities[idx].Action = secPolicy.Spec.Capabilities.Action
-							} else {
-								secPolicy.Spec.Capabilities.MatchCapabilities[idx].Action = secPolicy.Spec.Action
-							}
-						}
-					}
-				}
-
-				if len(secPolicy.Spec.Syscalls.MatchSyscalls) > 0 {
-					for idx, syscall := range secPolicy.Spec.Syscalls.MatchSyscalls {
-						if syscall.Severity == 0 {
-							if secPolicy.Spec.Syscalls.Severity != 0 {
-								secPolicy.Spec.Syscalls.MatchSyscalls[idx].Severity = secPolicy.Spec.Syscalls.Severity
-							} else {
-								secPolicy.Spec.Syscalls.MatchSyscalls[idx].Severity = secPolicy.Spec.Severity
-							}
-						}
-
-						if len(syscall.Tags) == 0 {
-							if len(secPolicy.Spec.Syscalls.Tags) > 0 {
-								secPolicy.Spec.Syscalls.MatchSyscalls[idx].Tags = secPolicy.Spec.Syscalls.Tags
-							} else {
-								secPolicy.Spec.Syscalls.MatchSyscalls[idx].Tags = secPolicy.Spec.Tags
-							}
-						}
-
-						if len(syscall.Message) == 0 {
-							if len(secPolicy.Spec.Syscalls.Message) > 0 {
-								secPolicy.Spec.Syscalls.MatchSyscalls[idx].Message = secPolicy.Spec.Syscalls.Message
-							} else {
-								secPolicy.Spec.Syscalls.MatchSyscalls[idx].Message = secPolicy.Spec.Message
-							}
-						}
-
-					}
-				}
-
-				if len(secPolicy.Spec.Syscalls.MatchPaths) > 0 {
-					for idx, syscall := range secPolicy.Spec.Syscalls.MatchPaths {
-						if syscall.Severity == 0 {
-							if secPolicy.Spec.Syscalls.Severity != 0 {
-								secPolicy.Spec.Syscalls.MatchPaths[idx].Severity = secPolicy.Spec.Syscalls.Severity
-							} else {
-								secPolicy.Spec.Syscalls.MatchPaths[idx].Severity = secPolicy.Spec.Severity
-							}
-						}
-
-						if len(syscall.Tags) == 0 {
-							if len(secPolicy.Spec.Syscalls.Tags) > 0 {
-								secPolicy.Spec.Syscalls.MatchPaths[idx].Tags = secPolicy.Spec.Syscalls.Tags
-							} else {
-								secPolicy.Spec.Syscalls.MatchPaths[idx].Tags = secPolicy.Spec.Tags
-							}
-						}
-
-						if len(syscall.Message) == 0 {
-							if len(secPolicy.Spec.Syscalls.Message) > 0 {
-								secPolicy.Spec.Syscalls.MatchPaths[idx].Message = secPolicy.Spec.Syscalls.Message
-							} else {
-								secPolicy.Spec.Syscalls.MatchPaths[idx].Message = secPolicy.Spec.Message
-							}
-						}
-
-					}
-				}
-
-				// update a security policy into the policy list
-
-				dm.SecurityPoliciesLock.Lock()
-
-				if event.Type == "ADDED" {
-					new := true
-					for _, policy := range dm.SecurityPolicies {
-						if policy.Metadata["namespaceName"] == secPolicy.Metadata["namespaceName"] && policy.Metadata["policyName"] == secPolicy.Metadata["policyName"] {
-							new = false
-							break
-						}
-					}
-					if new {
-						dm.SecurityPolicies = append(dm.SecurityPolicies, secPolicy)
-					}
-				} else if event.Type == "MODIFIED" {
-					for idx, policy := range dm.SecurityPolicies {
-						if policy.Metadata["namespaceName"] == secPolicy.Metadata["namespaceName"] && policy.Metadata["policyName"] == secPolicy.Metadata["policyName"] {
-							dm.SecurityPolicies[idx] = secPolicy
-							break
-						}
-					}
-				} else if event.Type == "DELETED" {
-					for idx, policy := range dm.SecurityPolicies {
-						if policy.Metadata["namespaceName"] == secPolicy.Metadata["namespaceName"] && policy.Metadata["policyName"] == secPolicy.Metadata["policyName"] {
-							dm.SecurityPolicies = append(dm.SecurityPolicies[:idx], dm.SecurityPolicies[idx+1:]...)
-							break
-						}
-					}
-				}
-
-				dm.SecurityPoliciesLock.Unlock()
-
-				dm.Logger.Printf("Detected a Security Policy (%s/%s/%s)", strings.ToLower(event.Type), secPolicy.Metadata["namespaceName"], secPolicy.Metadata["policyName"])
-
-				// apply security policies to pods
-				dm.UpdateSecurityPolicy(event.Type, secPolicy)
-			}
-		}
-	}
-}
-
-// ====================================== //
-// == Container Security Policy Update == //
-// ====================================== //
-
-// ParseAndUpdateContainerSecurityPolicy Function
-func (dm *KubeArmorDaemon) ParseAndUpdateContainerSecurityPolicy(event tp.K8sKubeArmorPolicyEvent) {
-	// create a container security policy
-	secPolicy := tp.SecurityPolicy{}
-
+// CreateSecurityPolicy object from a policy CRD
+func (dm *KubeArmorDaemon) CreateSecurityPolicy(policy ksp.KubeArmorPolicy) (secPolicy tp.SecurityPolicy, err error) {
 	secPolicy.Metadata = map[string]string{}
-	secPolicy.Metadata["namespaceName"] = "container_namespace" //event.Object.Metadata.Namespace
-	secPolicy.Metadata["policyName"] = event.Object.Metadata.Name
+	secPolicy.Metadata["namespaceName"] = policy.Namespace
+	secPolicy.Metadata["policyName"] = policy.Name
 
-	if err := kl.Clone(event.Object.Spec, &secPolicy.Spec); err != nil {
+	if err := kl.Clone(policy.Spec, &secPolicy.Spec); err != nil {
 		dm.Logger.Errf("Failed to clone a spec (%s)", err.Error())
-		return
+		return tp.SecurityPolicy{}, err
 	}
 
 	kl.ObjCommaExpandFirstDupOthers(&secPolicy.Spec.Network.MatchProtocols)
@@ -1362,15 +930,22 @@ func (dm *KubeArmorDaemon) ParseAndUpdateContainerSecurityPolicy(event tp.K8sKub
 
 	// add identities
 
-	secPolicy.Spec.Selector.Identities = []string{"namespaceName=" + event.Object.Metadata.Namespace}
-	containername := ""
+	secPolicy.Spec.Selector.Identities = []string{"namespaceName=" + policy.Namespace}
+
 	for k, v := range secPolicy.Spec.Selector.MatchLabels {
-		secPolicy.Spec.Selector.Identities = append(secPolicy.Spec.Selector.Identities, k+"="+v)
 		if k == "kubearmor.io/container.name" {
-			containername = v
+			if len(v) > 2 {
+				containerArray := v[1 : len(v)-1]
+				containers := strings.Split(containerArray, ",")
+				for _, container := range containers {
+					if len(container) > 0 {
+						secPolicy.Spec.Selector.Containers = append(secPolicy.Spec.Selector.Containers, strings.TrimSpace(container))
+					}
+
+				}
+			}
 		} else {
-			dm.Logger.Warnf("Fail to apply policy. The MatchLabels container name key should be `kubearmor.io/container.name` ")
-			return
+			secPolicy.Spec.Selector.Identities = append(secPolicy.Spec.Selector.Identities, k+"="+v)
 		}
 	}
 
@@ -1668,121 +1243,161 @@ func (dm *KubeArmorDaemon) ParseAndUpdateContainerSecurityPolicy(event tp.K8sKub
 		}
 	}
 
-	dm.Logger.Printf("Detected a Container Security Policy (%s/%s/%s)", strings.ToLower(event.Type), secPolicy.Metadata["namespaceName"], secPolicy.Metadata["policyName"])
+	if len(secPolicy.Spec.Syscalls.MatchSyscalls) > 0 {
+		for idx, syscall := range secPolicy.Spec.Syscalls.MatchSyscalls {
+			if syscall.Severity == 0 {
+				if secPolicy.Spec.Syscalls.Severity != 0 {
+					secPolicy.Spec.Syscalls.MatchSyscalls[idx].Severity = secPolicy.Spec.Syscalls.Severity
+				} else {
+					secPolicy.Spec.Syscalls.MatchSyscalls[idx].Severity = secPolicy.Spec.Severity
+				}
+			}
 
-	appArmorAnnotations := map[string]string{}
-	appArmorAnnotations[containername] = "kubearmor_" + containername
+			if len(syscall.Tags) == 0 {
+				if len(secPolicy.Spec.Syscalls.Tags) > 0 {
+					secPolicy.Spec.Syscalls.MatchSyscalls[idx].Tags = secPolicy.Spec.Syscalls.Tags
+				} else {
+					secPolicy.Spec.Syscalls.MatchSyscalls[idx].Tags = secPolicy.Spec.Tags
+				}
+			}
 
-	newPoint := tp.EndPoint{}
+			if len(syscall.Message) == 0 {
+				if len(secPolicy.Spec.Syscalls.Message) > 0 {
+					secPolicy.Spec.Syscalls.MatchSyscalls[idx].Message = secPolicy.Spec.Syscalls.Message
+				} else {
+					secPolicy.Spec.Syscalls.MatchSyscalls[idx].Message = secPolicy.Spec.Message
+				}
+			}
 
-	i := -1
+		}
+	}
 
-	for idx, endPoint := range dm.EndPoints {
-		if kl.MatchIdentities(secPolicy.Spec.Selector.Identities, endPoint.Identities) {
-			i = idx
-			newPoint = endPoint
+	if len(secPolicy.Spec.Syscalls.MatchPaths) > 0 {
+		for idx, syscall := range secPolicy.Spec.Syscalls.MatchPaths {
+			if syscall.Severity == 0 {
+				if secPolicy.Spec.Syscalls.Severity != 0 {
+					secPolicy.Spec.Syscalls.MatchPaths[idx].Severity = secPolicy.Spec.Syscalls.Severity
+				} else {
+					secPolicy.Spec.Syscalls.MatchPaths[idx].Severity = secPolicy.Spec.Severity
+				}
+			}
+
+			if len(syscall.Tags) == 0 {
+				if len(secPolicy.Spec.Syscalls.Tags) > 0 {
+					secPolicy.Spec.Syscalls.MatchPaths[idx].Tags = secPolicy.Spec.Syscalls.Tags
+				} else {
+					secPolicy.Spec.Syscalls.MatchPaths[idx].Tags = secPolicy.Spec.Tags
+				}
+			}
+
+			if len(syscall.Message) == 0 {
+				if len(secPolicy.Spec.Syscalls.Message) > 0 {
+					secPolicy.Spec.Syscalls.MatchPaths[idx].Message = secPolicy.Spec.Syscalls.Message
+				} else {
+					secPolicy.Spec.Syscalls.MatchPaths[idx].Message = secPolicy.Spec.Message
+				}
+			}
+
+		}
+	}
+	return
+}
+
+// WatchSecurityPolicies Function
+func (dm *KubeArmorDaemon) WatchSecurityPolicies() {
+	for {
+		if !K8s.CheckCustomResourceDefinition("kubearmorpolicies") {
+			time.Sleep(time.Second * 1)
+			continue
+		} else {
 			break
 		}
 	}
 
-	globalDefaultPosture := tp.DefaultPosture{
-		FileAction:         cfg.GlobalCfg.DefaultFilePosture,
-		NetworkAction:      cfg.GlobalCfg.DefaultNetworkPosture,
-		CapabilitiesAction: cfg.GlobalCfg.DefaultCapabilitiesPosture,
-	}
-	newPoint.DefaultPosture = globalDefaultPosture
+	factory := kspinformer.NewSharedInformerFactory(K8s.KSPClient, 0)
 
-	// check that a security policy should exist before performing delete operation
-	policymatch := 0
-	for _, policy := range newPoint.SecurityPolicies {
-		// check if policy exist
-		if policy.Metadata["namespaceName"] == secPolicy.Metadata["namespaceName"] && policy.Metadata["policyName"] == secPolicy.Metadata["policyName"] {
-			policymatch = 1 // policy exists
-		}
-	}
+	informer := factory.Security().V1().KubeArmorPolicies().Informer()
+	if _, err := informer.AddEventHandler(
+		cache.ResourceEventHandlerFuncs{
+			AddFunc: func(obj interface{}) {
+				// create a security policy
+				if policy, ok := obj.(*ksp.KubeArmorPolicy); ok {
 
-	// policy doesn't exist and the policy is being removed
-	if policymatch == 0 && event.Type == "DELETED" {
-		dm.Logger.Warnf("Failed to delete security policy. Policy doesn't exist")
+					secPolicy, err := dm.CreateSecurityPolicy(*policy)
+					if err != nil {
+						dm.Logger.Warnf("Error ADD, %s", err)
+						return
+					}
+					dm.SecurityPoliciesLock.Lock()
+					new := true
+					for _, policy := range dm.SecurityPolicies {
+						if policy.Metadata["namespaceName"] == secPolicy.Metadata["namespaceName"] && policy.Metadata["policyName"] == secPolicy.Metadata["policyName"] {
+							new = false
+							break
+						}
+					}
+					if new {
+						dm.SecurityPolicies = append(dm.SecurityPolicies, secPolicy)
+					}
+					dm.SecurityPoliciesLock.Unlock()
+					dm.Logger.Printf("Detected a Security Policy (added/%s/%s)", secPolicy.Metadata["namespaceName"], secPolicy.Metadata["policyName"])
+
+					// apply security policies to pods
+					dm.UpdateSecurityPolicy("ADDED", secPolicy)
+
+				}
+			},
+			UpdateFunc: func(oldObj, newObj interface{}) {
+				if policy, ok := newObj.(*ksp.KubeArmorPolicy); ok {
+					secPolicy, err := dm.CreateSecurityPolicy(*policy)
+					if err != nil {
+						return
+					}
+
+					dm.SecurityPoliciesLock.Lock()
+					for idx, policy := range dm.SecurityPolicies {
+						if policy.Metadata["namespaceName"] == secPolicy.Metadata["namespaceName"] && policy.Metadata["policyName"] == secPolicy.Metadata["policyName"] {
+							dm.SecurityPolicies[idx] = secPolicy
+							break
+						}
+					}
+					dm.SecurityPoliciesLock.Unlock()
+
+					dm.Logger.Printf("Detected a Security Policy (modified/%s/%s)", secPolicy.Metadata["namespaceName"], secPolicy.Metadata["policyName"])
+
+					// apply security policies to pods
+					dm.UpdateSecurityPolicy("MODIFIED", secPolicy)
+				}
+			},
+			DeleteFunc: func(obj interface{}) {
+				if policy, ok := obj.(*ksp.KubeArmorPolicy); ok {
+					secPolicy, err := dm.CreateSecurityPolicy(*policy)
+					if err != nil {
+						return
+					}
+					dm.SecurityPoliciesLock.Lock()
+					for idx, policy := range dm.SecurityPolicies {
+						if policy.Metadata["namespaceName"] == secPolicy.Metadata["namespaceName"] && policy.Metadata["policyName"] == secPolicy.Metadata["policyName"] {
+							dm.SecurityPolicies = append(dm.SecurityPolicies[:idx], dm.SecurityPolicies[idx+1:]...)
+							break
+						}
+					}
+					dm.SecurityPoliciesLock.Unlock()
+
+					dm.Logger.Printf("Detected a Security Policy (deleted/%s/%s)", secPolicy.Metadata["namespaceName"], secPolicy.Metadata["policyName"])
+
+					// apply security policies to pods
+					dm.UpdateSecurityPolicy("DELETED", secPolicy)
+				}
+			},
+		},
+	); err != nil {
+		dm.Logger.Err("Couldn't start watching KubeArmor Security Policies")
 		return
 	}
 
-	for idx, policy := range newPoint.SecurityPolicies {
-		if policy.Metadata["namespaceName"] == secPolicy.Metadata["namespaceName"] && policy.Metadata["policyName"] == secPolicy.Metadata["policyName"] {
-			if event.Type == "DELETED" {
-				newPoint.SecurityPolicies = append(newPoint.SecurityPolicies[:idx], newPoint.SecurityPolicies[idx+1:]...)
-				break
-			} else {
-				event.Type = "MODIFIED"
-				// Policy already exists so modify
-				newPoint.SecurityPolicies[idx] = secPolicy
-			}
-		}
-	}
-
-	if event.Type == "ADDED" {
-		dm.RuntimeEnforcer.UpdateAppArmorProfiles(containername, "ADDED", appArmorAnnotations)
-
-		newPoint.SecurityPolicies = append(newPoint.SecurityPolicies, secPolicy)
-		if i < 0 {
-			// Create new EndPoint
-			newPoint.NamespaceName = secPolicy.Metadata["namespaceName"]
-			newPoint.EndPointName = containername
-			newPoint.PolicyEnabled = tp.KubeArmorPolicyEnabled
-			newPoint.Identities = secPolicy.Spec.Selector.Identities
-
-			newPoint.ProcessVisibilityEnabled = true
-			newPoint.FileVisibilityEnabled = true
-			newPoint.NetworkVisibilityEnabled = true
-			newPoint.CapabilitiesVisibilityEnabled = true
-
-			newPoint.Containers = []string{}
-			newPoint.AppArmorProfiles = []string{"kubearmor_" + containername}
-
-			// add the endpoint into the endpoint list
-			dm.EndPoints = append(dm.EndPoints, newPoint)
-		} else {
-			dm.EndPoints[i] = newPoint
-		}
-
-		if cfg.GlobalCfg.Policy {
-			// update security policies
-			dm.Logger.UpdateSecurityPolicies("ADDED", newPoint)
-
-			if dm.RuntimeEnforcer != nil && newPoint.PolicyEnabled == tp.KubeArmorPolicyEnabled {
-				// enforce security policies
-				dm.RuntimeEnforcer.UpdateSecurityPolicies(newPoint)
-			}
-		}
-	} else if event.Type == "MODIFIED" {
-		dm.EndPoints[i] = newPoint
-		if cfg.GlobalCfg.Policy {
-			// update security policies
-			dm.Logger.UpdateSecurityPolicies("MODIFIED", newPoint)
-
-			if dm.RuntimeEnforcer != nil && newPoint.PolicyEnabled == tp.KubeArmorPolicyEnabled {
-				// enforce security policies
-				dm.RuntimeEnforcer.UpdateSecurityPolicies(newPoint)
-			}
-		}
-	} else { // DELETED
-		// update security policies after policy deletion
-		dm.Logger.UpdateSecurityPolicies("DELETED", newPoint)
-
-		dm.EndPoints[i] = newPoint
-		dm.RuntimeEnforcer.UpdateSecurityPolicies(newPoint)
-	}
-
-	// backup/remove container policies
-	if !dm.K8sEnabled && (cfg.GlobalCfg.KVMAgent || cfg.GlobalCfg.Policy) {
-		if event.Type == "ADDED" || event.Type == "MODIFIED" {
-			// backup SecurityPolicy to file
-			dm.backupKubeArmorContainerPolicy(secPolicy)
-		} else if event.Type == "DELETED" {
-			dm.removeBackUpPolicy(secPolicy.Metadata["policyName"])
-		}
-	}
-
+	go factory.Start(wait.NeverStop)
+	factory.WaitForCacheSync(wait.NeverStop)
 }
 
 // ================================= //
@@ -2262,7 +1877,11 @@ func (dm *KubeArmorDaemon) WatchHostSecurityPolicies() {
 		}
 
 		if resp := K8s.WatchK8sHostSecurityPolicies(); resp != nil {
-			defer resp.Body.Close()
+			defer func() {
+				if err := resp.Body.Close(); err != nil {
+					kg.Warnf("Error closing http stream %s\n", err)
+				}
+			}()
 
 			decoder := json.NewDecoder(resp.Body)
 			for {
@@ -2287,108 +1906,90 @@ func (dm *KubeArmorDaemon) WatchHostSecurityPolicies() {
 	}
 }
 
-// ================================= //
-// == HostPolicy Backup & Restore == //
-// ================================= //
-
-// backupKubeArmorHostPolicy Function
-func (dm *KubeArmorDaemon) backupKubeArmorHostPolicy(policy tp.HostSecurityPolicy) {
-	// Check for "/opt/kubearmor/policies" path. If dir not found, create the same
-	if _, err := os.Stat(cfg.PolicyDir); err != nil {
-		if err = os.MkdirAll(cfg.PolicyDir, 0700); err != nil {
-			kg.Warnf("Dir creation failed for [%v]", cfg.PolicyDir)
-			return
-		}
-	}
-
-	var file *os.File
-	var err error
-
-	if file, err = os.Create(cfg.PolicyDir + policy.Metadata["policyName"] + ".yaml"); err == nil {
-		if policyBytes, err := json.Marshal(policy); err == nil {
-			if _, err = file.Write(policyBytes); err == nil {
-				if err := file.Close(); err != nil {
-					dm.Logger.Errf(err.Error())
-				}
-			}
-		}
-	}
-}
-
-// Back up KubeArmor container policies in /opt/kubearmor/policies
-func (dm *KubeArmorDaemon) backupKubeArmorContainerPolicy(policy tp.SecurityPolicy) {
-	// Check for "/opt/kubearmor/policies" path. If dir not found, create the same
-	if _, err := os.Stat(cfg.PolicyDir); err != nil {
-		if err = os.MkdirAll(cfg.PolicyDir, 0700); err != nil {
-			kg.Warnf("Dir creation failed for [%v]", cfg.PolicyDir)
-			return
-		}
-	}
-
-	var file *os.File
-	var err error
-
-	if file, err = os.Create(cfg.PolicyDir + policy.Metadata["policyName"] + ".yaml"); err == nil {
-		if policyBytes, err := json.Marshal(policy); err == nil {
-			if _, err = file.Write(policyBytes); err == nil {
-				if err := file.Close(); err != nil {
-					dm.Logger.Errf(err.Error())
-				}
-			}
-		}
-	}
-}
-
-func (dm *KubeArmorDaemon) restoreKubeArmorHostPolicies() {
-	if _, err := os.Stat(cfg.PolicyDir); err != nil {
-		kg.Warn("Policies dir not found for restoration")
-		return
-	}
-
-	// List all policies files from "/opt/kubearmor/policies" path
-	if policyFiles, err := ioutil.ReadDir(cfg.PolicyDir); err == nil {
-		for _, file := range policyFiles {
-			if data, err := ioutil.ReadFile(cfg.PolicyDir + file.Name()); err == nil {
-				var hostPolicy tp.HostSecurityPolicy
-				if err := json.Unmarshal(data, &hostPolicy); err == nil {
-					dm.HostSecurityPolicies = append(dm.HostSecurityPolicies, hostPolicy)
-				}
-			}
-		}
-
-		if len(policyFiles) != 0 {
-			dm.UpdateHostSecurityPolicies()
-		} else {
-			kg.Warn("No policies found for restoration")
-		}
-	}
-}
-
-// removeBackUpPolicy Function
-func (dm *KubeArmorDaemon) removeBackUpPolicy(name string) {
-
-	fname := cfg.PolicyDir + name + ".yaml"
-	// Check for "/opt/kubearmor/policies" path. If dir not found, create the same
-	if _, err := os.Stat(fname); err != nil {
-		kg.Printf("Backup policy [%v] not exist", fname)
-		return
-	}
-
-	if err := os.Remove(fname); err != nil {
-		kg.Errf("unable to delete file:%s err=%s", fname, err.Error())
-	}
-}
-
 // ===================== //
 // == Default Posture == //
 // ===================== //
 
-func validateDefaultPosture(key string, ns *corev1.Namespace, defaultPosture string) string {
+func (dm *KubeArmorDaemon) updatEndpointsWithCM(cm *corev1.ConfigMap, action string) {
+	dm.EndPointsLock.Lock()
+	defer dm.EndPointsLock.Unlock()
+
+	dm.DefaultPosturesLock.Lock()
+	defer dm.DefaultPosturesLock.Unlock()
+
+	// get all namespaces
+	nsList, err := K8s.K8sClient.CoreV1().Namespaces().List(context.Background(), metav1.ListOptions{})
+	if err != nil {
+		kg.Err("unable to fetch namespace list")
+		return
+	}
+
+	// for each namespace if needed change endpoint depfault posture
+	for _, ns := range nsList.Items {
+		ns := ns
+		fp, fa := validateDefaultPosture("kubearmor-file-posture", &ns, cm.Data[cfg.ConfigDefaultFilePosture])
+		np, na := validateDefaultPosture("kubearmor-network-posture", &ns, cm.Data[cfg.ConfigDefaultNetworkPosture])
+		cp, ca := validateDefaultPosture("kubearmor-capabilities-posture", &ns, cm.Data[cfg.ConfigDefaultCapabilitiesPosture])
+		annotated := fa || na || ca      // if namespace is annotated for atleast one posture
+		fullyannotated := fa && na && ca // if namespace is fully annotated
+		posture := tp.DefaultPosture{
+			FileAction:         fp,
+			NetworkAction:      np,
+			CapabilitiesAction: cp,
+		}
+
+		// skip if namespace is fully annotated
+		if fullyannotated {
+			continue
+		}
+
+		for idx, endpoint := range dm.EndPoints {
+			// skip all endpoints not in current namespace
+			if endpoint.NamespaceName != ns.Name {
+				continue
+			}
+
+			if endpoint.DefaultPosture != posture { // optimization, only if its needed to update the posture
+				dm.Logger.Printf("updating default posture for %s in %s", ns.Name, endpoint.EndPointName)
+				dm.UpdateDefaultPostureWithCM(&dm.EndPoints[idx], action, ns.Name, posture, annotated)
+			}
+		}
+
+	}
+}
+
+// UpdateDefaultPostureWithCM Function
+func (dm *KubeArmorDaemon) UpdateDefaultPostureWithCM(endPoint *tp.EndPoint, action string, namespace string, defaultPosture tp.DefaultPosture, annotated bool) {
+
+	// namespace is (partialy) annotated with posture annotation(s)
+	if annotated {
+		// update the dm.DefaultPosture[namespace]
+		dm.DefaultPostures[namespace] = defaultPosture
+	}
+	dm.Logger.UpdateDefaultPosture(action, namespace, defaultPosture)
+
+	// update the endpoint with updated default posture
+	endPoint.DefaultPosture = defaultPosture
+	dm.Logger.Printf("Updated default posture for %s with %v", endPoint.EndPointName, endPoint.DefaultPosture)
+	if cfg.GlobalCfg.Policy {
+		// update security policies
+		if dm.RuntimeEnforcer != nil {
+			if endPoint.PolicyEnabled == tp.KubeArmorPolicyEnabled {
+				// enforce security policies
+				dm.RuntimeEnforcer.UpdateSecurityPolicies(*endPoint)
+			}
+		}
+	}
+
+}
+
+// returns default posture and a boolean value states, if annotation is set or not
+func validateDefaultPosture(key string, ns *corev1.Namespace, defaultPosture string) (string, bool) {
 	if posture, ok := ns.Annotations[key]; ok {
 		if posture == "audit" || posture == "Audit" {
-			return "audit"
+			return "audit", true
 		} else if posture == "block" || posture == "Block" {
-			return "block"
+			return "block", true
 		}
 		// Invalid Annotation Value, Updating the value to global default
 		ns.Annotations[key] = defaultPosture
@@ -2397,23 +1998,29 @@ func validateDefaultPosture(key string, ns *corev1.Namespace, defaultPosture str
 			kg.Warnf("Error updating invalid default posture annotation for %v", updatedNS)
 		}
 	}
-	return defaultPosture
+	return defaultPosture, false
 }
 
 // UpdateDefaultPosture Function
-func (dm *KubeArmorDaemon) UpdateDefaultPosture(action string, namespace string, defaultPosture tp.DefaultPosture) {
+func (dm *KubeArmorDaemon) UpdateDefaultPosture(action string, namespace string, defaultPosture tp.DefaultPosture, annotated bool) {
 	dm.EndPointsLock.Lock()
 	defer dm.EndPointsLock.Unlock()
 
 	dm.DefaultPosturesLock.Lock()
 	defer dm.DefaultPosturesLock.Unlock()
 
+	// namespace deleted
 	if action == "DELETED" {
-		delete(dm.DefaultPostures, namespace)
+		_, ok := dm.DefaultPostures[namespace]
+		if ok {
+			delete(dm.DefaultPostures, namespace)
+		}
 	}
 
-	dm.DefaultPostures[namespace] = defaultPosture
-
+	// namespace is annotated with posture annotation(s)
+	if annotated {
+		dm.DefaultPostures[namespace] = defaultPosture
+	}
 	dm.Logger.UpdateDefaultPosture(action, namespace, defaultPosture)
 
 	for idx, endPoint := range dm.EndPoints {
@@ -2423,8 +2030,8 @@ func (dm *KubeArmorDaemon) UpdateDefaultPosture(action string, namespace string,
 				continue
 			}
 
+			dm.Logger.Printf("Updating default posture for %s with %v namespace default %v", endPoint.EndPointName, dm.EndPoints[idx].DefaultPosture, defaultPosture)
 			dm.EndPoints[idx].DefaultPosture = defaultPosture
-			dm.Logger.Printf("Updating default posture for %s with %v/%v", endPoint.EndPointName, dm.EndPoints[idx].DefaultPosture, dm.DefaultPostures[namespace])
 
 			if cfg.GlobalCfg.Policy {
 				// update security policies
@@ -2439,40 +2046,281 @@ func (dm *KubeArmorDaemon) UpdateDefaultPosture(action string, namespace string,
 	}
 }
 
+func validateGlobalDefaultPosture(posture string) string {
+	switch posture {
+	case "audit", "Audit":
+		return "audit"
+	case "block", "Block":
+		return "block"
+	default:
+		return "audit"
+	}
+}
+
+// ======================== //
+// == Default Visibility == //
+// ======================== //
+
+func (dm *KubeArmorDaemon) validateVisibility(scope string, visibility string) bool {
+	return strings.Contains(visibility, scope)
+}
+
+// UpdateVisibility Function
+func (dm *KubeArmorDaemon) UpdateVisibility(action string, namespace string, visibility tp.Visibility) {
+	dm.SystemMonitor.BpfMapLock.Lock()
+	defer dm.SystemMonitor.BpfMapLock.Unlock()
+
+	if action == "ADDED" || action == "MODIFIED" {
+		if val, ok := dm.SystemMonitor.NamespacePidsMap[namespace]; ok {
+			val.Capability = visibility.Capabilities
+			val.File = visibility.File
+			val.Network = visibility.Network
+			val.Process = visibility.Process
+			dm.SystemMonitor.NamespacePidsMap[namespace] = val
+			for _, nskey := range val.NsKeys {
+				dm.SystemMonitor.UpdateNsKeyMap("MODIFIED", nskey, visibility)
+			}
+		} else {
+			dm.SystemMonitor.NamespacePidsMap[namespace] = monitor.NsVisibility{
+				NsKeys:     []monitor.NsKey{},
+				File:       visibility.File,
+				Process:    visibility.Process,
+				Capability: visibility.Capabilities,
+				Network:    visibility.Network,
+			}
+		}
+		dm.Logger.Printf("Namespace %s visibiliy configured %+v", namespace, visibility)
+	} else if action == "DELETED" {
+		if val, ok := dm.SystemMonitor.NamespacePidsMap[namespace]; ok {
+			for _, nskey := range val.NsKeys {
+				dm.Logger.Warnf("Calling delete")
+				dm.SystemMonitor.UpdateNsKeyMap("DELETED", nskey, tp.Visibility{})
+			}
+		}
+		delete(dm.SystemMonitor.NamespacePidsMap, namespace)
+	}
+}
+
+var visibilityKey string = "kubearmor-visibility"
+
+func (dm *KubeArmorDaemon) updateVisibilityWithCM(cm *corev1.ConfigMap, action string) {
+
+	// we overwrite
+
+	// get all namespaces
+	nsList, err := K8s.K8sClient.CoreV1().Namespaces().List(context.Background(), metav1.ListOptions{})
+	if err != nil {
+		kg.Err("unable to fetch namespace list")
+		return
+	}
+
+	// for each namespace if needed change the visibility
+	for _, ns := range nsList.Items {
+		// if namespace is annotated with visibility annotation don't update on config map change
+		if _, found := ns.Annotations[visibilityKey]; found || kl.ContainsElement(dm.SystemMonitor.UntrackedNamespaces, ns.Name) {
+			continue
+		}
+
+		visibility := tp.Visibility{
+			File:         strings.Contains(cm.Data[cfg.ConfigVisibility], "file"),
+			Process:      strings.Contains(cm.Data[cfg.ConfigVisibility], "process"),
+			Network:      strings.Contains(cm.Data[cfg.ConfigVisibility], "network"),
+			Capabilities: strings.Contains(cm.Data[cfg.ConfigVisibility], "capabilities"),
+		}
+		dm.UpdateVisibility("MODIFIED", ns.Name, visibility)
+	}
+}
+
+// UpdateGlobalPosture Function
+func (dm *KubeArmorDaemon) UpdateGlobalPosture(posture tp.DefaultPosture) {
+	dm.EndPointsLock.Lock()
+	defer dm.EndPointsLock.Unlock()
+
+	dm.DefaultPosturesLock.Lock()
+	defer dm.DefaultPosturesLock.Unlock()
+
+	cfg.GlobalCfg.DefaultFilePosture = validateGlobalDefaultPosture(posture.FileAction)
+	cfg.GlobalCfg.DefaultNetworkPosture = validateGlobalDefaultPosture(posture.NetworkAction)
+	cfg.GlobalCfg.DefaultCapabilitiesPosture = validateGlobalDefaultPosture(posture.CapabilitiesAction)
+
+	dm.Logger.Printf("[Update] Global DefaultPosture {File:%v, Capabilities:%v, Network:%v}",
+		cfg.GlobalCfg.DefaultFilePosture,
+		cfg.GlobalCfg.DefaultCapabilitiesPosture,
+		cfg.GlobalCfg.DefaultNetworkPosture)
+
+}
+
 // WatchDefaultPosture Function
 func (dm *KubeArmorDaemon) WatchDefaultPosture() {
 	factory := informers.NewSharedInformerFactory(K8s.K8sClient, 0)
 	informer := factory.Core().V1().Namespaces().Informer()
 
-	informer.AddEventHandler(cache.ResourceEventHandlerFuncs{
+	if _, err := informer.AddEventHandler(cache.ResourceEventHandlerFuncs{
 		AddFunc: func(obj interface{}) {
 			if ns, ok := obj.(*corev1.Namespace); ok {
+				fp, fa := validateDefaultPosture("kubearmor-file-posture", ns, cfg.GlobalCfg.DefaultFilePosture)
+				np, na := validateDefaultPosture("kubearmor-network-posture", ns, cfg.GlobalCfg.DefaultNetworkPosture)
+				cp, ca := validateDefaultPosture("kubearmor-capabilities-posture", ns, cfg.GlobalCfg.DefaultCapabilitiesPosture)
 				defaultPosture := tp.DefaultPosture{
-					FileAction:         validateDefaultPosture("kubearmor-file-posture", ns, cfg.GlobalCfg.DefaultFilePosture),
-					NetworkAction:      validateDefaultPosture("kubearmor-network-posture", ns, cfg.GlobalCfg.DefaultNetworkPosture),
-					CapabilitiesAction: validateDefaultPosture("kubearmor-capabilities-posture", ns, cfg.GlobalCfg.DefaultCapabilitiesPosture),
+					FileAction:         fp,
+					NetworkAction:      np,
+					CapabilitiesAction: cp,
 				}
-				dm.UpdateDefaultPosture("ADDED", ns.Name, defaultPosture)
+				annotated := fa || na || ca
+				// Set Visibility to Global Default
+				visibility := tp.Visibility{
+					File:         dm.validateVisibility("file", cfg.GlobalCfg.Visibility),
+					Process:      dm.validateVisibility("process", cfg.GlobalCfg.Visibility),
+					Network:      dm.validateVisibility("network", cfg.GlobalCfg.Visibility),
+					Capabilities: dm.validateVisibility("capabilities", cfg.GlobalCfg.Visibility),
+				}
+
+				// Set Visibility to Namespace Annotation if exists
+				if ns.Annotations != nil && ns.Annotations[visibilityKey] != "" {
+					visibility = tp.Visibility{
+						File:         dm.validateVisibility("file", ns.Annotations[visibilityKey]),
+						Process:      dm.validateVisibility("process", ns.Annotations[visibilityKey]),
+						Network:      dm.validateVisibility("network", ns.Annotations[visibilityKey]),
+						Capabilities: dm.validateVisibility("capabilities", ns.Annotations[visibilityKey]),
+					}
+				}
+				dm.UpdateDefaultPosture("ADDED", ns.Name, defaultPosture, annotated)
+				dm.UpdateVisibility("ADDED", ns.Name, visibility)
 			}
 		},
-		UpdateFunc: func(old, new interface{}) {
+		UpdateFunc: func(_, new interface{}) {
 			if ns, ok := new.(*corev1.Namespace); ok {
+				fp, fa := validateDefaultPosture("kubearmor-file-posture", ns, cfg.GlobalCfg.DefaultFilePosture)
+				np, na := validateDefaultPosture("kubearmor-network-posture", ns, cfg.GlobalCfg.DefaultNetworkPosture)
+				cp, ca := validateDefaultPosture("kubearmor-capabilities-posture", ns, cfg.GlobalCfg.DefaultCapabilitiesPosture)
 				defaultPosture := tp.DefaultPosture{
-					FileAction:         validateDefaultPosture("kubearmor-file-posture", ns, cfg.GlobalCfg.DefaultFilePosture),
-					NetworkAction:      validateDefaultPosture("kubearmor-network-posture", ns, cfg.GlobalCfg.DefaultNetworkPosture),
-					CapabilitiesAction: validateDefaultPosture("kubearmor-capabilities-posture", ns, cfg.GlobalCfg.DefaultCapabilitiesPosture),
+					FileAction:         fp,
+					NetworkAction:      np,
+					CapabilitiesAction: cp,
 				}
-				dm.UpdateDefaultPosture("MODIFIED", ns.Name, defaultPosture)
+				annotated := fa || na || ca
+				// Set Visibility to Global Default
+				visibility := tp.Visibility{
+					File:         dm.validateVisibility("file", cfg.GlobalCfg.Visibility),
+					Process:      dm.validateVisibility("process", cfg.GlobalCfg.Visibility),
+					Network:      dm.validateVisibility("network", cfg.GlobalCfg.Visibility),
+					Capabilities: dm.validateVisibility("capabilities", cfg.GlobalCfg.Visibility),
+				}
+
+				// Set Visibility to Namespace Annotation if exists
+				if ns.Annotations != nil && ns.Annotations[visibilityKey] != "" {
+					visibility = tp.Visibility{
+						File:         dm.validateVisibility("file", ns.Annotations[visibilityKey]),
+						Process:      dm.validateVisibility("process", ns.Annotations[visibilityKey]),
+						Network:      dm.validateVisibility("network", ns.Annotations[visibilityKey]),
+						Capabilities: dm.validateVisibility("capabilities", ns.Annotations[visibilityKey]),
+					}
+				}
+				dm.UpdateDefaultPosture("MODIFIED", ns.Name, defaultPosture, annotated)
+				dm.UpdateVisibility("MODIFIED", ns.Name, visibility)
+
 			}
 		},
 		DeleteFunc: func(obj interface{}) {
 			if ns, ok := obj.(*corev1.Namespace); ok {
-				dm.UpdateDefaultPosture("DELETED", ns.Name, tp.DefaultPosture{})
+				_, fa := validateDefaultPosture("kubearmor-file-posture", ns, cfg.GlobalCfg.DefaultFilePosture)
+				_, na := validateDefaultPosture("kubearmor-network-posture", ns, cfg.GlobalCfg.DefaultNetworkPosture)
+				_, ca := validateDefaultPosture("kubearmor-capabilities-posture", ns, cfg.GlobalCfg.DefaultCapabilitiesPosture)
+				annotated := fa || na || ca
+				dm.UpdateDefaultPosture("DELETED", ns.Name, tp.DefaultPosture{}, annotated)
+				dm.UpdateVisibility("DELETED", ns.Name, tp.Visibility{})
 			}
 		},
-	})
+	}); err != nil {
+		dm.Logger.Err("Couldn't start watching Default Posture Annotations and namespace")
+		return
+	}
 
 	go factory.Start(wait.NeverStop)
 	factory.WaitForCacheSync(wait.NeverStop)
-	dm.Logger.Print("Started watching Default Posture Annotations")
+	dm.Logger.Print("Started watching Default Posture Annotations and namespace")
+}
+
+// WatchConfigMap function
+func (dm *KubeArmorDaemon) WatchConfigMap() {
+	configMapLabelOption := informers.WithTweakListOptions(func(opts *metav1.ListOptions) {
+		opts.LabelSelector = fmt.Sprintf("kubearmor-app=%s", "kubearmor-configmap")
+	})
+	factory := informers.NewSharedInformerFactoryWithOptions(K8s.K8sClient, 0, configMapLabelOption)
+	informer := factory.Core().V1().ConfigMaps().Informer()
+
+	cmNS := dm.GetConfigMapNS()
+
+	if _, err := informer.AddEventHandler(cache.ResourceEventHandlerFuncs{
+		AddFunc: func(obj interface{}) {
+			if cm, ok := obj.(*corev1.ConfigMap); ok && cm.Namespace == cmNS {
+				cfg.GlobalCfg.HostVisibility = cm.Data[cfg.ConfigHostVisibility]
+				cfg.GlobalCfg.Visibility = cm.Data[cfg.ConfigVisibility]
+				globalPosture := tp.DefaultPosture{
+					FileAction:         cm.Data[cfg.ConfigDefaultFilePosture],
+					NetworkAction:      cm.Data[cfg.ConfigDefaultNetworkPosture],
+					CapabilitiesAction: cm.Data[cfg.ConfigDefaultCapabilitiesPosture],
+				}
+				currentGlobalPosture := tp.DefaultPosture{
+					FileAction:         cfg.GlobalCfg.DefaultFilePosture,
+					NetworkAction:      cfg.GlobalCfg.DefaultNetworkPosture,
+					CapabilitiesAction: cfg.GlobalCfg.DefaultCapabilitiesPosture,
+				}
+				dm.Logger.Printf("Current Global Posture is %v", currentGlobalPosture)
+				dm.UpdateGlobalPosture(globalPosture)
+
+				// update default posture for endpoints
+				dm.updatEndpointsWithCM(cm, "ADDED")
+				// update visibility for namespaces
+				dm.updateVisibilityWithCM(cm, "ADDED")
+			}
+		},
+		UpdateFunc: func(_, new interface{}) {
+			if cm, ok := new.(*corev1.ConfigMap); ok && cm.Namespace == cmNS {
+				cfg.GlobalCfg.HostVisibility = cm.Data[cfg.ConfigHostVisibility]
+				cfg.GlobalCfg.Visibility = cm.Data[cfg.ConfigVisibility]
+				globalPosture := tp.DefaultPosture{
+					FileAction:         cm.Data[cfg.ConfigDefaultFilePosture],
+					NetworkAction:      cm.Data[cfg.ConfigDefaultNetworkPosture],
+					CapabilitiesAction: cm.Data[cfg.ConfigDefaultCapabilitiesPosture],
+				}
+				currentGlobalPosture := tp.DefaultPosture{
+					FileAction:         cfg.GlobalCfg.DefaultFilePosture,
+					NetworkAction:      cfg.GlobalCfg.DefaultNetworkPosture,
+					CapabilitiesAction: cfg.GlobalCfg.DefaultCapabilitiesPosture,
+				}
+				dm.Logger.Printf("Current Global Posture is %v", currentGlobalPosture)
+				dm.UpdateGlobalPosture(globalPosture)
+
+				// update default posture for endpoints
+				dm.updatEndpointsWithCM(cm, "MODIFIED")
+				// update visibility for namespaces
+				dm.updateVisibilityWithCM(cm, "MODIFIED")
+			}
+		},
+		DeleteFunc: func(obj interface{}) {
+			// nothing to do here
+		},
+	}); err != nil {
+		dm.Logger.Err("Couldn't start watching Configmap")
+		return
+	}
+
+	go factory.Start(wait.NeverStop)
+	factory.WaitForCacheSync(wait.NeverStop)
+	dm.Logger.Print("Started watching Configmap")
+
+}
+
+// GetConfigMapNS Returns KubeArmor configmap namespace
+func (dm *KubeArmorDaemon) GetConfigMapNS() string {
+	// get namespace from env
+	envNamespace := os.Getenv("KUBEARMOR_NAMESPACE")
+
+	if envNamespace == "" {
+		// kubearmor is running as system process,
+		// return "kube-system" for testing purpose in dev env
+		return "kube-system"
+	}
+	return envNamespace
 }

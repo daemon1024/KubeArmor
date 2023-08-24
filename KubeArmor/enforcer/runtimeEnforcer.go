@@ -1,14 +1,16 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2021 Authors of KubeArmor
 
+// Package enforcer is responsible for setting up and handling policy updates for supported enforcers including AppArmor, SELinux and BPFLSM
 package enforcer
 
 import (
 	"fmt"
-	"io/ioutil"
 	"os"
 	"path/filepath"
 	"strings"
+
+	probe "github.com/kubearmor/KubeArmor/KubeArmor/utils/bpflsmprobe"
 
 	kl "github.com/kubearmor/KubeArmor/KubeArmor/common"
 	cfg "github.com/kubearmor/KubeArmor/KubeArmor/config"
@@ -36,7 +38,7 @@ type RuntimeEnforcer struct {
 }
 
 // selectLsm Function
-func selectLsm(re *RuntimeEnforcer, lsmOrder, availablelsms, supportedlsm []string, node tp.Node, logger *fd.Feeder) *RuntimeEnforcer {
+func selectLsm(re *RuntimeEnforcer, lsmOrder, availablelsms, supportedlsm []string, node tp.Node, pinpath string, logger *fd.Feeder) *RuntimeEnforcer {
 	var err error
 	var lsm string
 
@@ -98,7 +100,7 @@ apparmor:
 	goto lsmselection
 
 bpf:
-	re.bpfEnforcer, err = be.NewBPFEnforcer(node, logger)
+	re.bpfEnforcer, err = be.NewBPFEnforcer(node, pinpath, logger)
 	if re.bpfEnforcer != nil {
 		if err != nil {
 			re.Logger.Print("Error Initialising BPF-LSM Enforcer, Cleaning Up")
@@ -121,36 +123,49 @@ nil:
 }
 
 // NewRuntimeEnforcer Function
-func NewRuntimeEnforcer(node tp.Node, logger *fd.Feeder) *RuntimeEnforcer {
+func NewRuntimeEnforcer(node tp.Node, pinpath string, logger *fd.Feeder) *RuntimeEnforcer {
 	availablelsms := []string{"bpf", "selinux", "apparmor"}
 	re := &RuntimeEnforcer{}
 	re.Logger = logger
+
+	lsms := []string{}
+
+	lsmFile := []byte{}
+	lsmPath := "/sys/kernel/security/lsm"
 
 	if !kl.IsK8sLocal() {
 		// mount securityfs
 		if err := kl.RunCommandAndWaitWithErr("mount", []string{"-t", "securityfs", "securityfs", "/sys/kernel/security"}); err != nil {
 			if _, err := os.Stat(filepath.Clean("/sys/kernel/security")); err != nil {
-				re.Logger.Errf("Failed to read /sys/kernel/security (%s)", err.Error())
-				return nil
+				re.Logger.Warnf("Failed to read /sys/kernel/security (%s)", err.Error())
+				goto probeBPFLSM
 			}
 		}
 	}
 
-	lsm := []byte{}
-	lsmPath := "/sys/kernel/security/lsm"
-
 	if _, err := os.Stat(filepath.Clean(lsmPath)); err == nil {
-		lsm, err = ioutil.ReadFile(lsmPath)
+		lsmFile, err = os.ReadFile(lsmPath)
 		if err != nil {
-			re.Logger.Errf("Failed to read /sys/kernel/security/lsm (%s)", err.Error())
-			return nil
+			re.Logger.Warnf("Failed to read /sys/kernel/security/lsm (%s)", err.Error())
+			goto probeBPFLSM
 		}
 	}
 
-	lsms := string(lsm)
-	re.Logger.Printf("Supported LSMs: %s", lsms)
+	lsms = strings.Split(string(lsmFile), ",")
 
-	return selectLsm(re, cfg.GlobalCfg.LsmOrder, availablelsms, strings.Split(lsms, ","), node, logger)
+probeBPFLSM:
+	if !kl.ContainsElement(lsms, "bpf") {
+		err := probe.CheckBPFLSMSupport()
+		if err == nil {
+			lsms = append(lsms, "bpf")
+		} else {
+			re.Logger.Warnf("BPF LSM not supported %s", err.Error())
+		}
+	}
+
+	re.Logger.Printf("Supported LSMs: %s", strings.Join(lsms, ","))
+
+	return selectLsm(re, cfg.GlobalCfg.LsmOrder, availablelsms, lsms, node, pinpath, logger)
 }
 
 // RegisterContainer registers container identifiers to BPFEnforcer Map

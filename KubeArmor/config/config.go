@@ -43,7 +43,8 @@ type KubearmorConfig struct {
 
 	CoverageTest bool // Enable/Disable Coverage Test
 
-	LsmOrder []string // LSM order
+	LsmOrder  []string // LSM order
+	BPFFsPath string   // path to the BPF filesystem
 }
 
 // PolicyDir policy dir path for host policies backup
@@ -115,6 +116,9 @@ const ConfigK8sEnv string = "k8s"
 // LsmOrder Preference order of the LSMs
 const LsmOrder string = "lsm"
 
+// BPFFsPath key
+const BPFFsPath string = "bpfFsPath"
+
 func readCmdLineParams() {
 	hostname, _ := os.Hostname()
 	clusterStr := flag.String(ConfigCluster, "default", "cluster name")
@@ -133,17 +137,19 @@ func readCmdLineParams() {
 	kvmAgentB := flag.Bool(ConfigKubearmorVM, false, "enabling KubeArmorVM")
 	k8sEnvB := flag.Bool(ConfigK8sEnv, true, "is k8s env?")
 
-	defaultFilePosture := flag.String(ConfigDefaultFilePosture, "block", "configuring default enforcement action in global file context {allow|audit|block}")
-	defaultNetworkPosture := flag.String(ConfigDefaultNetworkPosture, "block", "configuring default enforcement action in global network context {allow|audit|block}")
-	defaultCapabilitiesPosture := flag.String(ConfigDefaultCapabilitiesPosture, "block", "configuring default enforcement action in global capability context {allow|audit|block}")
+	defaultFilePosture := flag.String(ConfigDefaultFilePosture, "audit", "configuring default enforcement action in global file context {allow|audit|block}")
+	defaultNetworkPosture := flag.String(ConfigDefaultNetworkPosture, "audit", "configuring default enforcement action in global network context {allow|audit|block}")
+	defaultCapabilitiesPosture := flag.String(ConfigDefaultCapabilitiesPosture, "audit", "configuring default enforcement action in global capability context {allow|audit|block}")
 
-	hostDefaultFilePosture := flag.String(ConfigHostDefaultFilePosture, "block", "configuring default enforcement action in global file context {allow|audit|block}")
-	hostDefaultNetworkPosture := flag.String(ConfigHostDefaultNetworkPosture, "block", "configuring default enforcement action in global network context {allow|audit|block}")
-	hostDefaultCapabilitiesPosture := flag.String(ConfigHostDefaultCapabilitiesPosture, "block", "configuring default enforcement action in global capability context {allow|audit|block}")
+	hostDefaultFilePosture := flag.String(ConfigHostDefaultFilePosture, "audit", "configuring default enforcement action in global file context {allow|audit|block}")
+	hostDefaultNetworkPosture := flag.String(ConfigHostDefaultNetworkPosture, "audit", "configuring default enforcement action in global network context {allow|audit|block}")
+	hostDefaultCapabilitiesPosture := flag.String(ConfigHostDefaultCapabilitiesPosture, "audit", "configuring default enforcement action in global capability context {allow|audit|block}")
 
 	coverageTestB := flag.Bool(ConfigCoverageTest, false, "enabling CoverageTest")
 
 	lsmOrder := flag.String(LsmOrder, "bpf,apparmor,selinux", "lsm preference order to use, available lsms [bpf, apparmor, selinux]")
+
+	bpfFsPath := flag.String(BPFFsPath, "/sys/fs/bpf", "Path to the BPF filesystem to use for storing maps")
 
 	flags := []string{}
 	flag.VisitAll(func(f *flag.Flag) {
@@ -181,6 +187,8 @@ func readCmdLineParams() {
 	viper.SetDefault(ConfigCoverageTest, *coverageTestB)
 
 	viper.SetDefault(LsmOrder, *lsmOrder)
+
+	viper.SetDefault(BPFFsPath, *bpfFsPath)
 }
 
 // LoadConfig Load configuration
@@ -256,6 +264,8 @@ func LoadConfig() error {
 	GlobalCfg.CoverageTest = viper.GetBool(ConfigCoverageTest)
 
 	GlobalCfg.LsmOrder = strings.Split(viper.GetString(LsmOrder), ",")
+
+	GlobalCfg.BPFFsPath = viper.GetString(BPFFsPath)
 
 	kg.Printf("Final Configuration [%+v]", GlobalCfg)
 

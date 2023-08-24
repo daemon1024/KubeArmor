@@ -28,6 +28,7 @@ const (
 const (
 	PROCESS = 0
 	FILE    = 1
+	NETWORK = 0
 )
 
 // Map Key Identifiers for Whitelist/Posture
@@ -253,6 +254,7 @@ func (be *BPFEnforcer) UpdateContainerRules(id string, securityPolicies []tp.Sec
 					}
 					newrules.NetworkRuleList[key] = val
 				} else if net.Action == "Block" {
+					val[NETWORK] = val[NETWORK] | DENY
 					newrules.NetworkRuleList[key] = val
 				}
 			} else {
@@ -266,6 +268,7 @@ func (be *BPFEnforcer) UpdateContainerRules(id string, securityPolicies []tp.Sec
 						}
 						newrules.NetworkRuleList[key] = val
 					} else if net.Action == "Block" {
+						val[NETWORK] = val[NETWORK] | DENY
 						newrules.NetworkRuleList[key] = val
 					}
 
@@ -415,7 +418,7 @@ func dirtoMap(idx int, p, src string, m map[InnerKey][2]uint8, val [2]uint8) {
 		}
 		if oldval, ok := m[key]; ok {
 			if oldval[idx]&DIR != 0 {
-				val[idx] = val[idx] | DIR
+				val[idx] = oldval[idx] | HINT
 			}
 		}
 		m[key] = val

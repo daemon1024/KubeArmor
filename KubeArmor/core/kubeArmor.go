@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2022 Authors of KubeArmor
 
+// Package core is responsible for initiating and maintaining interactions between external entities like K8s,CRIs and internal KubeArmor entities like eBPF Monitor and Log Feeders
 package core
 
 import (
@@ -41,7 +42,8 @@ func init() {
 // KubeArmorDaemon Structure
 type KubeArmorDaemon struct {
 	// node
-	Node tp.Node
+	Node     tp.Node
+	NodeLock *sync.RWMutex
 
 	// flag
 	K8sEnabled bool
@@ -88,6 +90,9 @@ type KubeArmorDaemon struct {
 
 	// WgDaemon Handler
 	WgDaemon sync.WaitGroup
+
+	// system monitor lock
+	MonitorLock *sync.RWMutex
 }
 
 // NewKubeArmorDaemon Function
@@ -95,6 +100,7 @@ func NewKubeArmorDaemon() *KubeArmorDaemon {
 	dm := new(KubeArmorDaemon)
 
 	dm.Node = tp.Node{}
+	dm.NodeLock = new(sync.RWMutex)
 
 	dm.K8sEnabled = false
 
@@ -103,7 +109,6 @@ func NewKubeArmorDaemon() *KubeArmorDaemon {
 
 	dm.Containers = map[string]tp.Container{}
 	dm.ContainersLock = new(sync.RWMutex)
-
 	dm.EndPoints = []tp.EndPoint{}
 	dm.EndPointsLock = new(sync.RWMutex)
 
@@ -125,6 +130,8 @@ func NewKubeArmorDaemon() *KubeArmorDaemon {
 	dm.KVMAgent = nil
 
 	dm.WgDaemon = sync.WaitGroup{}
+
+	dm.MonitorLock = new(sync.RWMutex)
 
 	return dm
 }
@@ -189,7 +196,7 @@ func (dm *KubeArmorDaemon) DestroyKubeArmorDaemon() {
 
 // InitLogger Function
 func (dm *KubeArmorDaemon) InitLogger() bool {
-	dm.Logger = fd.NewFeeder(&dm.Node)
+	dm.Logger = fd.NewFeeder(&dm.Node, &dm.NodeLock)
 	return dm.Logger != nil
 }
 
@@ -216,7 +223,7 @@ func (dm *KubeArmorDaemon) CloseLogger() bool {
 
 // InitSystemMonitor Function
 func (dm *KubeArmorDaemon) InitSystemMonitor() bool {
-	dm.SystemMonitor = mon.NewSystemMonitor(&dm.Node, dm.Logger, &dm.Containers, &dm.ContainersLock, &dm.ActiveHostPidMap, &dm.ActivePidMapLock)
+	dm.SystemMonitor = mon.NewSystemMonitor(&dm.Node, &dm.NodeLock, dm.Logger, &dm.Containers, &dm.ContainersLock, &dm.ActiveHostPidMap, &dm.ActivePidMapLock, &dm.MonitorLock)
 	if dm.SystemMonitor == nil {
 		return false
 	}
@@ -255,8 +262,8 @@ func (dm *KubeArmorDaemon) CloseSystemMonitor() bool {
 // ====================== //
 
 // InitRuntimeEnforcer Function
-func (dm *KubeArmorDaemon) InitRuntimeEnforcer() bool {
-	dm.RuntimeEnforcer = efc.NewRuntimeEnforcer(dm.Node, dm.Logger)
+func (dm *KubeArmorDaemon) InitRuntimeEnforcer(pinpath string) bool {
+	dm.RuntimeEnforcer = efc.NewRuntimeEnforcer(dm.Node, pinpath, dm.Logger)
 	return dm.RuntimeEnforcer != nil
 }
 
@@ -319,9 +326,11 @@ func GetOSSigChannel() chan os.Signal {
 func KubeArmor() {
 	// create a daemon
 	dm := NewKubeArmorDaemon()
-
 	// Enable KubeArmorHostPolicy for both VM and KVMAgent and in non-k8s env
 	if cfg.GlobalCfg.KVMAgent || (!cfg.GlobalCfg.K8sEnv && cfg.GlobalCfg.HostPolicy) {
+
+		dm.NodeLock.Lock()
+
 		dm.Node.NodeName = cfg.GlobalCfg.Host
 		dm.Node.NodeIP = kl.GetExternalIPAddr()
 
@@ -338,6 +347,8 @@ func KubeArmor() {
 
 		dm.Node.KernelVersion = kl.GetCommandOutputWithoutErr("uname", []string{"-r"})
 		dm.Node.KernelVersion = strings.TrimSuffix(dm.Node.KernelVersion, "\n")
+
+		dm.NodeLock.Unlock()
 
 	} else if cfg.GlobalCfg.K8sEnv {
 		if !K8s.InitK8sClient() {
@@ -364,11 +375,17 @@ func KubeArmor() {
 		time.Sleep(time.Second * 1)
 
 		for timeout := 0; timeout <= 60; timeout++ {
-			if dm.Node.NodeIP != "" {
+
+			// read node information
+			dm.NodeLock.RLock()
+			nodeIP := dm.Node.NodeIP
+			dm.NodeLock.RUnlock()
+
+			if nodeIP != "" {
 				break
 			}
 
-			if dm.Node.NodeIP == "" && timeout == 60 {
+			if nodeIP == "" && timeout == 60 {
 				kg.Print("The node information is not available, terminating KubeArmor")
 
 				// destroy the daemon
@@ -383,7 +400,7 @@ func KubeArmor() {
 			time.Sleep(time.Second * 1)
 		}
 	}
-
+	dm.NodeLock.RLock()
 	kg.Printf("Node Name: %s", dm.Node.NodeName)
 	kg.Printf("Node IP: %s", dm.Node.NodeIP)
 	if dm.K8sEnabled {
@@ -396,7 +413,7 @@ func KubeArmor() {
 		kg.Printf("Kubelet Version: %s", dm.Node.KubeletVersion)
 		kg.Printf("Container Runtime: %s", dm.Node.ContainerRuntimeVersion)
 	}
-
+	dm.NodeLock.RUnlock()
 	// == //
 
 	// initialize log feeder
@@ -430,7 +447,7 @@ func KubeArmor() {
 		dm.Logger.Print("Started to monitor system events")
 
 		// initialize runtime enforcer
-		if !dm.InitRuntimeEnforcer() {
+		if !dm.InitRuntimeEnforcer(dm.SystemMonitor.PinPath) {
 			dm.Logger.Print("Disabled KubeArmor Enforcer since No LSM is enabled")
 		} else {
 			dm.Logger.Print("Initialized KubeArmor Enforcer")
@@ -449,6 +466,8 @@ func KubeArmor() {
 
 	// Un-orchestrated workloads
 	if !dm.K8sEnabled && cfg.GlobalCfg.Policy {
+
+		dm.SetContainerNSVisibility()
 
 		// Check if cri socket set, if not then auto detect
 		if cfg.GlobalCfg.CRISocket == "" {
@@ -469,7 +488,7 @@ func KubeArmor() {
 		} else if strings.Contains(cfg.GlobalCfg.CRISocket, "containerd") {
 			// monitor containerd events
 			go dm.MonitorContainerdEvents()
-		} else if strings.Contains(cfg.GlobalCfg.CRISocket, "crio") {
+		} else if strings.Contains(cfg.GlobalCfg.CRISocket, "cri-o") {
 			// monitor crio events
 			go dm.MonitorCrioEvents()
 		} else {
@@ -501,7 +520,7 @@ func KubeArmor() {
 			} else if strings.Contains(dm.Node.ContainerRuntimeVersion, "containerd") {
 				// monitor containerd events
 				go dm.MonitorContainerdEvents()
-			} else if strings.Contains(dm.Node.ContainerRuntimeVersion, "crio") {
+			} else if strings.Contains(dm.Node.ContainerRuntimeVersion, "cri-o") {
 				// monitor crio events
 				go dm.MonitorCrioEvents()
 			} else {
@@ -563,7 +582,7 @@ func KubeArmor() {
 					return
 				}
 			} else if strings.HasPrefix(dm.Node.ContainerRuntimeVersion, "cri-o") { // cri-o
-				socketFile := kl.GetCRISocket("crio")
+				socketFile := kl.GetCRISocket("cri-o")
 
 				if socketFile != "" {
 					cfg.GlobalCfg.CRISocket = "unix://" + socketFile
@@ -601,6 +620,11 @@ func KubeArmor() {
 		// watch default posture
 		go dm.WatchDefaultPosture()
 		dm.Logger.Print("Started to monitor per-namespace default posture")
+
+		// watch kubearmor configmap
+		go dm.WatchConfigMap()
+		dm.Logger.Print("Watching for posture changes")
+
 	}
 
 	if dm.K8sEnabled && cfg.GlobalCfg.HostPolicy {
@@ -638,7 +662,7 @@ func KubeArmor() {
 
 	if cfg.GlobalCfg.KVMAgent || !dm.K8sEnabled {
 		// Restore and apply all kubearmor host security policies
-		dm.restoreKubeArmorHostPolicies()
+		dm.restoreKubeArmorPolicies()
 	}
 
 	// == //

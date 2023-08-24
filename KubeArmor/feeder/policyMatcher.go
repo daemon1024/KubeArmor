@@ -48,16 +48,16 @@ func getFileProcessUID(path string) string {
 }
 
 // getOperationAndCapabilityFromName Function
-func getOperationAndCapabilityFromName(capName string) (op, cap string) {
+func getOperationAndCapabilityFromName(capName string) (op, capability string) {
 	switch strings.ToLower(capName) {
 	case "net_raw":
 		op = "Network"
-		cap = "SOCK_RAW"
+		capability = "SOCK_RAW"
 	default:
 		return "", "unknown"
 	}
 
-	return op, cap
+	return op, capability
 }
 
 // newMatchPolicy Function
@@ -914,13 +914,13 @@ func setLogFields(log *tp.Log, existAllowPolicy bool, defaultPosture string, vis
 		return true
 	}
 
-	if visibility {
-		if containerEvent {
-			(*log).Type = "ContainerLog"
-		} else {
-			(*log).Type = "HostLog"
-		}
+	if containerEvent {
+		(*log).Type = "ContainerLog"
+		return true
+	}
 
+	if visibility {
+		(*log).Type = "HostLog"
 		return true
 	}
 
@@ -945,6 +945,8 @@ func (fd *Feeder) UpdateMatchedPolicy(log tp.Log) tp.Log {
 	existNetworkAllowPolicy := false
 	existCapabilitiesAllowPolicy := false
 
+	fd.DefaultPosturesLock.Lock()
+	defer fd.DefaultPosturesLock.Unlock()
 	if log.Result == "Passed" || log.Result == "Operation not permitted" || log.Result == "Permission denied" {
 		fd.SecurityPoliciesLock.RLock()
 
@@ -973,6 +975,7 @@ func (fd *Feeder) UpdateMatchedPolicy(log tp.Log) tp.Log {
 			firstLogResource := strings.Split(log.Resource, " ")[0]
 			firstLogResourceDir := getDirectoryPart(firstLogResource)
 			firstLogResourceDirCount := strings.Count(firstLogResourceDir, "/")
+			procDirCount := strings.Count(getDirectoryPart(log.ProcessName), "/")
 
 			switch log.Operation {
 			case "Process", "File":
@@ -987,19 +990,27 @@ func (fd *Feeder) UpdateMatchedPolicy(log tp.Log) tp.Log {
 					switch secPolicy.ResourceType {
 					case "Glob":
 						// Match using a globbing syntax very similar to the AppArmor's
-						matchedRegex, _ = filepath.Match(secPolicy.Resource, log.Resource) // pattern (secPolicy.Resource) -> string (log.Resource)
+						fileMatch, _ := filepath.Match(secPolicy.Resource, log.Resource)
+						procMatch, _ := filepath.Match(secPolicy.Resource, log.ProcessName) // pattern (secPolicy.Resource) -> string (log.Resource)
+						matchedRegex = fileMatch || procMatch
 					case "Regexp":
 						if secPolicy.Regexp != nil {
 							// Match using compiled regular expression
-							matchedRegex = secPolicy.Regexp.MatchString(log.Resource) // regexp (secPolicy.Regexp) -> string (log.Resource)
+							fileMatch := secPolicy.Regexp.MatchString(log.Resource)    // regexp (secPolicy.Regexp) -> string (log.Resource)
+							procMatch := secPolicy.Regexp.MatchString(log.ProcessName) // pattern (secPolicy.Resource) -> string (log.Resource)
+							matchedRegex = fileMatch || procMatch
 						}
 					}
 
 					// match resources
-					if matchedRegex || (secPolicy.ResourceType == "Path" && secPolicy.Resource == firstLogResource) ||
-						(secPolicy.ResourceType == "Directory" && strings.HasPrefix(firstLogResourceDir, secPolicy.Resource) &&
+					if matchedRegex || (secPolicy.Operation == "File" && secPolicy.ResourceType == "Path" && secPolicy.Resource == firstLogResource) ||
+						(secPolicy.Operation == "Process" && secPolicy.ResourceType == "Path" && secPolicy.Resource == log.ProcessName) ||
+						(secPolicy.Operation == "File" && secPolicy.ResourceType == "Directory" && strings.HasPrefix(firstLogResourceDir, secPolicy.Resource) &&
 							((!secPolicy.Recursive && firstLogResourceDirCount == strings.Count(secPolicy.Resource, "/")) ||
-								(secPolicy.Recursive && firstLogResourceDirCount >= strings.Count(secPolicy.Resource, "/")))) {
+								(secPolicy.Recursive && firstLogResourceDirCount >= strings.Count(secPolicy.Resource, "/")))) ||
+						(secPolicy.Operation == "Process" && secPolicy.ResourceType == "Directory" && strings.HasPrefix(getDirectoryPart(log.ProcessName), secPolicy.Resource) &&
+							((!secPolicy.Recursive && procDirCount == strings.Count(secPolicy.Resource, "/")) ||
+								(secPolicy.Recursive && procDirCount >= strings.Count(secPolicy.Resource, "/")))) {
 
 						matchedFlags := false
 
@@ -1155,9 +1166,10 @@ func (fd *Feeder) UpdateMatchedPolicy(log tp.Log) tp.Log {
 					}
 				}
 
-				if fd.DefaultPostures[log.NamespaceName].FileAction == "block" && secPolicy.Action == "Audit (Allow)" && log.Result == "Passed" {
-					// defaultPosture = block + audit mode
+				// apply the default postures when log.type isn't yet known
 
+				if fd.DefaultPostures[log.NamespaceName].FileAction == "block" && secPolicy.Action == "Audit (Allow)" && log.Result == "Passed" && log.Type == "" {
+					// defaultPosture = block + audit mode
 					log.Type = "MatchedPolicy"
 
 					log.PolicyName = "DefaultPosture"
@@ -1171,9 +1183,8 @@ func (fd *Feeder) UpdateMatchedPolicy(log tp.Log) tp.Log {
 					log.Action = "Audit (Block)"
 				}
 
-				if fd.DefaultPostures[log.NamespaceName].FileAction == "audit" && (secPolicy.Action == "Allow" || secPolicy.Action == "Audit (Allow)") && log.Result == "Passed" {
+				if fd.DefaultPostures[log.NamespaceName].FileAction == "audit" && (secPolicy.Action == "Allow" || secPolicy.Action == "Audit (Allow)") && log.Result == "Passed" && log.Type == "" {
 					// defaultPosture = audit
-
 					log.Type = "MatchedPolicy"
 
 					log.PolicyName = "DefaultPosture"
@@ -1430,8 +1441,6 @@ func (fd *Feeder) UpdateMatchedPolicy(log tp.Log) tp.Log {
 		if log.Type == "" {
 			// defaultPosture (audit) or container log
 
-			fd.DefaultPosturesLock.Lock()
-
 			if _, ok := fd.DefaultPostures[log.NamespaceName]; !ok {
 				globalDefaultPosture := tp.DefaultPosture{
 					FileAction:         cfg.GlobalCfg.DefaultFilePosture,
@@ -1440,8 +1449,6 @@ func (fd *Feeder) UpdateMatchedPolicy(log tp.Log) tp.Log {
 				}
 				fd.DefaultPostures[log.NamespaceName] = globalDefaultPosture
 			}
-
-			fd.DefaultPosturesLock.Unlock()
 
 			if log.Operation == "Process" {
 				if setLogFields(&log, existFileAllowPolicy, fd.DefaultPostures[log.NamespaceName].FileAction, log.ProcessVisibilityEnabled, true) {
@@ -1475,7 +1482,6 @@ func (fd *Feeder) UpdateMatchedPolicy(log tp.Log) tp.Log {
 	} else { // host
 		if log.Type == "" {
 			// host log
-
 			if log.Operation == "Process" {
 				if setLogFields(&log, existFileAllowPolicy, "allow", fd.Node.ProcessVisibilityEnabled, false) {
 					return log
@@ -1493,7 +1499,6 @@ func (fd *Feeder) UpdateMatchedPolicy(log tp.Log) tp.Log {
 					return log
 				}
 			}
-
 		} else if log.Type == "MatchedPolicy" {
 			log.Type = "MatchedHostPolicy"
 

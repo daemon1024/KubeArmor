@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2021 Authors of KubeArmor
 
+// Package core is responsible for initiating and maintaining interactions between external entities like K8s,CRIs and internal KubeArmor entities like eBPF Monitor and Log Feeders
 package core
 
 import (
@@ -19,7 +20,7 @@ import (
 	pb "github.com/containerd/containerd/api/services/containers/v1"
 	pt "github.com/containerd/containerd/api/services/tasks/v1"
 	"github.com/containerd/containerd/namespaces"
-	"github.com/containerd/typeurl"
+	"github.com/containerd/typeurl/v2"
 	"google.golang.org/grpc"
 
 	specs "github.com/opencontainers/runtime-spec/specs-go"
@@ -131,8 +132,7 @@ func (ch *ContainerdHandler) GetContainerInfo(ctx context.Context, containerID s
 	// == container base == //
 
 	container.ContainerID = res.Container.ID
-	container.ContainerName = res.Container.ID[:12]
-
+	container.ContainerName = res.Container.ID
 	container.NamespaceName = "Unknown"
 	container.EndPointName = "Unknown"
 
@@ -236,6 +236,7 @@ func (ch *ContainerdHandler) GetDeletedContainerdContainers(containers map[strin
 
 	for globalContainerID := range ch.containers {
 		if _, ok := containers[globalContainerID]; !ok {
+			deletedContainers[globalContainerID] = context.TODO()
 			delete(ch.containers, globalContainerID)
 		}
 	}
@@ -312,11 +313,19 @@ func (dm *KubeArmorDaemon) UpdateContainerdContainer(ctx context.Context, contai
 
 		if dm.SystemMonitor != nil && cfg.GlobalCfg.Policy {
 			// update NsMap
-			dm.SystemMonitor.AddContainerIDToNsMap(containerID, container.PidNS, container.MntNS)
+			dm.SystemMonitor.AddContainerIDToNsMap(containerID, container.NamespaceName, container.PidNS, container.MntNS)
 			dm.RuntimeEnforcer.RegisterContainer(containerID, container.PidNS, container.MntNS)
 		}
 
-		dm.Logger.Printf("Detected a container (added/%s)", containerID[:12])
+		if !dm.K8sEnabled {
+			dm.ContainersLock.Lock()
+			dm.EndPointsLock.Lock()
+			dm.MatchandUpdateContainerSecurityPolicies(containerID)
+			dm.EndPointsLock.Unlock()
+			dm.ContainersLock.Unlock()
+		}
+
+		dm.Logger.Printf("Detected a container (added/%.12s/pidns=%d/mntns=%d)", containerID, container.PidNS, container.MntNS)
 
 	} else if action == "destroy" {
 		dm.ContainersLock.Lock()
@@ -324,6 +333,11 @@ func (dm *KubeArmorDaemon) UpdateContainerdContainer(ctx context.Context, contai
 		if !ok {
 			dm.ContainersLock.Unlock()
 			return false
+		}
+		if !dm.K8sEnabled {
+			dm.EndPointsLock.Lock()
+			dm.MatchandRemoveContainerFromEndpoint(containerID)
+			dm.EndPointsLock.Unlock()
 		}
 		delete(dm.Containers, containerID)
 		dm.ContainersLock.Unlock()
@@ -347,11 +361,11 @@ func (dm *KubeArmorDaemon) UpdateContainerdContainer(ctx context.Context, contai
 
 		if dm.SystemMonitor != nil && cfg.GlobalCfg.Policy {
 			// update NsMap
-			dm.SystemMonitor.DeleteContainerIDFromNsMap(containerID)
+			dm.SystemMonitor.DeleteContainerIDFromNsMap(containerID, container.NamespaceName, container.PidNS, container.MntNS)
 			dm.RuntimeEnforcer.UnregisterContainer(containerID)
 		}
 
-		dm.Logger.Printf("Detected a container (removed/%s)", containerID[:12])
+		dm.Logger.Printf("Detected a container (removed/%.12s/pidns=%d/mntns=%d)", containerID, container.PidNS, container.MntNS)
 	}
 
 	return true
@@ -378,11 +392,6 @@ func (dm *KubeArmorDaemon) MonitorContainerdEvents() {
 
 		default:
 			containers := Containerd.GetContainerdContainers()
-
-			if len(containers) == len(Containerd.containers) {
-				time.Sleep(time.Millisecond * 100)
-				continue
-			}
 
 			invalidContainers := []string{}
 

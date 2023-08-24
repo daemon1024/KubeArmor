@@ -17,7 +17,7 @@ import (
 	tp "github.com/kubearmor/KubeArmor/KubeArmor/types"
 	spec "github.com/opencontainers/runtime-spec/specs-go"
 	"google.golang.org/grpc"
-	pb "k8s.io/cri-api/pkg/apis/runtime/v1alpha2"
+	pb "k8s.io/cri-api/pkg/apis/runtime/v1"
 )
 
 // CrioHandler Structure
@@ -254,16 +254,30 @@ func (dm *KubeArmorDaemon) UpdateCrioContainer(ctx context.Context, containerID,
 
 		if dm.SystemMonitor != nil && cfg.GlobalCfg.Policy {
 			// update NsMap
-			dm.SystemMonitor.AddContainerIDToNsMap(containerID, container.PidNS, container.MntNS)
+			dm.SystemMonitor.AddContainerIDToNsMap(containerID, container.NamespaceName, container.PidNS, container.MntNS)
+			dm.RuntimeEnforcer.RegisterContainer(containerID, container.PidNS, container.MntNS)
 		}
 
-		dm.Logger.Printf("Detected a container (added/%s)", containerID[:12])
+		if !dm.K8sEnabled {
+			dm.ContainersLock.Lock()
+			dm.EndPointsLock.Lock()
+			dm.MatchandUpdateContainerSecurityPolicies(containerID)
+			dm.EndPointsLock.Unlock()
+			dm.ContainersLock.Unlock()
+		}
+
+		dm.Logger.Printf("Detected a container (added/%.12s)", containerID)
 	} else if action == "destroy" {
 		dm.ContainersLock.Lock()
 		container, ok := dm.Containers[containerID]
 		if !ok {
 			dm.ContainersLock.Unlock()
 			return false
+		}
+		if !dm.K8sEnabled {
+			dm.EndPointsLock.Lock()
+			dm.MatchandRemoveContainerFromEndpoint(containerID)
+			dm.EndPointsLock.Unlock()
 		}
 		delete(dm.Containers, containerID)
 		dm.ContainersLock.Unlock()
@@ -287,10 +301,11 @@ func (dm *KubeArmorDaemon) UpdateCrioContainer(ctx context.Context, containerID,
 
 		if dm.SystemMonitor != nil && cfg.GlobalCfg.Policy {
 			// update NsMap
-			dm.SystemMonitor.DeleteContainerIDFromNsMap(containerID)
+			dm.SystemMonitor.DeleteContainerIDFromNsMap(containerID, container.NamespaceName, container.PidNS, container.MntNS)
+			dm.RuntimeEnforcer.UnregisterContainer(containerID)
 		}
 
-		dm.Logger.Printf("Detected a container (removed/%s)", containerID[:12])
+		dm.Logger.Printf("Detected a container (removed/%.12s)", containerID)
 	}
 
 	return true
@@ -319,13 +334,6 @@ func (dm *KubeArmorDaemon) MonitorCrioEvents() {
 			containers, err := Crio.GetCrioContainers()
 			if err != nil {
 				return
-			}
-
-			// if number of stored container IDs is equal to number of container IDs
-			// returned by the API, no containers added/deleted
-			if len(containers) == len(Crio.containers) {
-				time.Sleep(time.Millisecond * 10)
-				continue
 			}
 
 			invalidContainers := []string{}

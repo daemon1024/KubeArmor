@@ -12,19 +12,26 @@ var port int32 = 32767
 
 // K8s Object Name Defaults
 var (
-	serviceAccountName                  = kubearmor
-	clusterRoleBindingName              = kubearmor
-	relayServiceName                    = kubearmor
-	relayDeploymentName                 = "kubearmor-relay"
-	policyManagerServiceName            = "kubearmor-policy-manager-metrics-service"
-	policyManagerDeploymentName         = "kubearmor-policy-manager"
-	hostPolicyManagerServiceName        = "kubearmor-host-policy-manager-metrics-service"
-	hostPolicyManagerDeploymentName     = "kubearmor-host-policy-manager"
-	AnnotationsControllerServiceName    = "kubearmor-annotation-manager-metrics-service"
-	AnnotationsControllerDeploymentName = "kubearmor-annotation-manager"
-	KubeArmorControllerServiceName      = "kubearmor-controller-metrics-service"
-	KubeArmorControllerDeploymentName   = "kubearmor-controller"
-	KubeArmorControllerSecretName       = "kubearmor-webhook-server-cert"
+	KubeArmorServiceAccountName                      = kubearmor
+	KubeArmorClusterRoleBindingName                  = "kubearmor-clusterrolebinding"
+	KubeArmorClusterRoleName                         = "kubearmor-clusterrole"
+	RelayServiceName                                 = kubearmor
+	RelayDeploymentName                              = "kubearmor-relay"
+	KubeArmorConfigMapName                           = "kubearmor-config"
+	KubeArmorControllerDeploymentName                = "kubearmor-controller"
+	KubeArmorControllerServiceAccountName            = KubeArmorControllerDeploymentName
+	KubeArmorControllerClusterRoleName               = "kubearmor-controller-clusterrole"
+	KubeArmorControllerClusterRoleBindingName        = "kubearmor-controller-clusterrolebinding"
+	KubeArmorControllerLeaderElectionRoleName        = "kubearmor-controller-leader-election-role"
+	KubeArmorControllerLeaderElectionRoleBindingName = "kubearmor-controller-leader-election-rolebinding"
+	KubeArmorControllerProxyRoleName                 = "kubearmor-controller-proxy-role"
+	KubeArmorControllerProxyRoleBindingName          = "kubearmor-controller-proxy-rolebinding"
+	KubeArmorControllerMetricsReaderRoleName         = "kubearmor-controller-metrics-reader-role"
+	KubeArmorControllerMetricsReaderRoleBindingName  = "kubearmor-controller-metrics-reader-rolebinding"
+	KubeArmorControllerMetricsServiceName            = "kubearmor-controller-metrics-service"
+	KubeArmorControllerWebhookServiceName            = "kubearmor-controller-webhook-service"
+	KubeArmorControllerSecretName                    = "kubearmor-controller-webhook-server-cert"
+	KubeArmorControllerMutatingWebhookConfiguration  = "kubearmor-controller-mutating-webhook-configuration"
 )
 
 // DaemonSetConfig Structure
@@ -39,6 +46,7 @@ var hostPathDirectory = corev1.HostPathDirectory
 var hostPathDirectoryOrCreate = corev1.HostPathDirectoryOrCreate
 var hostPathFile = corev1.HostPathFile
 var hostPathSocket = corev1.HostPathSocket
+var hostContainerStorageMountPropagation = corev1.MountPropagationHostToContainer
 
 var gkeHostUsrVolMnt = corev1.VolumeMount{
 	Name:      "usr-src-path", // /usr -> /media/root/usr (read-only) check issue #579 for details
@@ -96,14 +104,20 @@ var envVar = []corev1.EnvVar{
 			},
 		},
 	},
+	{
+		Name: "KUBEARMOR_NAMESPACE",
+		ValueFrom: &corev1.EnvVarSource{
+			FieldRef: &corev1.ObjectFieldSelector{
+				FieldPath: "metadata.namespace",
+			},
+		},
+	},
 }
 
 // Environment Specific Daemonset Configuration
 var defaultConfigs = map[string]DaemonSetConfig{
 	"generic": {
-		Args: []string{
-			"-enableKubeArmorHostPolicy",
-		},
+		Args: []string{},
 		Envs: envVar,
 		VolumeMounts: []corev1.VolumeMount{
 			apparmorVolMnt,
@@ -113,14 +127,16 @@ var defaultConfigs = map[string]DaemonSetConfig{
 				ReadOnly:  true,
 			},
 			{
-				Name:      "containerd-storage-path", // containerd storage
-				MountPath: "/run/containerd",
-				ReadOnly:  true,
+				Name:             "containerd-storage-path", // containerd storage
+				MountPath:        "/run/containerd",
+				MountPropagation: &hostContainerStorageMountPropagation,
+				ReadOnly:         true,
 			},
 			{
-				Name:      "docker-storage-path", // docker storage
-				MountPath: "/var/lib/docker",
-				ReadOnly:  true,
+				Name:             "docker-storage-path", // docker storage
+				MountPath:        "/var/lib/docker",
+				MountPropagation: &hostContainerStorageMountPropagation,
+				ReadOnly:         true,
 			},
 		},
 		Volumes: []corev1.Volume{
@@ -155,9 +171,7 @@ var defaultConfigs = map[string]DaemonSetConfig{
 		},
 	},
 	"oke": {
-		Args: []string{
-			"-enableKubeArmorHostPolicy",
-		},
+		Args: []string{},
 		Envs: envVar,
 		VolumeMounts: []corev1.VolumeMount{
 			apparmorVolMnt,
@@ -167,9 +181,10 @@ var defaultConfigs = map[string]DaemonSetConfig{
 				ReadOnly:  true,
 			},
 			{
-				Name:      "crio-storage-path", // crio storage - stores all of its data, including containers images, in this directory.
-				MountPath: "/var/lib/containers/storage",
-				ReadOnly:  true,
+				Name:             "crio-storage-path", // crio storage - stores all of its data, including containers images, in this directory.
+				MountPath:        "/var/lib/containers/storage",
+				MountPropagation: &hostContainerStorageMountPropagation,
+				ReadOnly:         true,
 			},
 		},
 		Volumes: []corev1.Volume{
@@ -195,9 +210,7 @@ var defaultConfigs = map[string]DaemonSetConfig{
 		},
 	},
 	"docker": {
-		Args: []string{
-			"-enableKubeArmorHostPolicy",
-		},
+		Args: []string{},
 		Envs: envVar,
 		VolumeMounts: []corev1.VolumeMount{
 			apparmorVolMnt,
@@ -207,9 +220,10 @@ var defaultConfigs = map[string]DaemonSetConfig{
 				ReadOnly:  true,
 			},
 			{
-				Name:      "docker-storage-path", // docker storage
-				MountPath: "/var/lib/docker",
-				ReadOnly:  true,
+				Name:             "docker-storage-path", // docker storage
+				MountPath:        "/var/lib/docker",
+				MountPropagation: &hostContainerStorageMountPropagation,
+				ReadOnly:         true,
 			},
 		},
 		Volumes: []corev1.Volume{
@@ -245,9 +259,10 @@ var defaultConfigs = map[string]DaemonSetConfig{
 				ReadOnly:  true,
 			},
 			{
-				Name:      "docker-storage-path", // docker storage
-				MountPath: "/var/lib/docker",
-				ReadOnly:  true,
+				Name:             "docker-storage-path", // docker storage
+				MountPath:        "/var/lib/docker",
+				MountPropagation: &hostContainerStorageMountPropagation,
+				ReadOnly:         true,
 			},
 		},
 		Volumes: []corev1.Volume{
@@ -273,9 +288,7 @@ var defaultConfigs = map[string]DaemonSetConfig{
 		},
 	},
 	"microk8s": {
-		Args: []string{
-			"-enableKubeArmorHostPolicy",
-		},
+		Args: []string{},
 		Envs: envVar,
 		VolumeMounts: []corev1.VolumeMount{
 			apparmorVolMnt,
@@ -285,9 +298,10 @@ var defaultConfigs = map[string]DaemonSetConfig{
 				ReadOnly:  true,
 			},
 			{
-				Name:      "containerd-storage-path", // containerd storage
-				MountPath: "/run/containerd",
-				ReadOnly:  true,
+				Name:             "containerd-storage-path", // containerd storage
+				MountPath:        "/run/containerd",
+				MountPropagation: &hostContainerStorageMountPropagation,
+				ReadOnly:         true,
 			},
 		},
 		Volumes: []corev1.Volume{
@@ -313,9 +327,7 @@ var defaultConfigs = map[string]DaemonSetConfig{
 		},
 	},
 	"k3s": {
-		Args: []string{
-			"-enableKubeArmorHostPolicy",
-		},
+		Args: []string{},
 		Envs: envVar,
 		VolumeMounts: []corev1.VolumeMount{
 			apparmorVolMnt,
@@ -325,9 +337,10 @@ var defaultConfigs = map[string]DaemonSetConfig{
 				ReadOnly:  true,
 			},
 			{
-				Name:      "containerd-storage-path", // containerd storage
-				MountPath: "/run/containerd",
-				ReadOnly:  true,
+				Name:             "containerd-storage-path", // containerd storage
+				MountPath:        "/run/containerd",
+				MountPropagation: &hostContainerStorageMountPropagation,
+				ReadOnly:         true,
 			},
 		},
 		Volumes: []corev1.Volume{
@@ -353,9 +366,7 @@ var defaultConfigs = map[string]DaemonSetConfig{
 		},
 	},
 	"gke": {
-		Args: []string{
-			"-enableKubeArmorHostPolicy",
-		},
+		Args: []string{},
 		Envs: envVar,
 		VolumeMounts: []corev1.VolumeMount{
 			apparmorVolMnt,
@@ -365,14 +376,16 @@ var defaultConfigs = map[string]DaemonSetConfig{
 				ReadOnly:  true,
 			},
 			{
-				Name:      "containerd-storage-path", // containerd storage
-				MountPath: "/run/containerd",
-				ReadOnly:  true,
+				Name:             "containerd-storage-path", // containerd storage
+				MountPath:        "/run/containerd",
+				MountPropagation: &hostContainerStorageMountPropagation,
+				ReadOnly:         true,
 			},
 			{
-				Name:      "docker-storage-path", // docker storage
-				MountPath: "/var/lib/docker",
-				ReadOnly:  true,
+				Name:             "docker-storage-path", // docker storage
+				MountPath:        "/var/lib/docker",
+				MountPropagation: &hostContainerStorageMountPropagation,
+				ReadOnly:         true,
 			},
 		},
 		Volumes: []corev1.Volume{
@@ -407,9 +420,7 @@ var defaultConfigs = map[string]DaemonSetConfig{
 		},
 	},
 	"eks": {
-		Args: []string{
-			"-enableKubeArmorHostPolicy",
-		},
+		Args: []string{},
 		Envs: envVar,
 		VolumeMounts: []corev1.VolumeMount{
 			apparmorVolMnt,
@@ -419,14 +430,16 @@ var defaultConfigs = map[string]DaemonSetConfig{
 				ReadOnly:  true,
 			},
 			{
-				Name:      "containerd-storage-path", // containerd storage
-				MountPath: "/run/containerd",
-				ReadOnly:  true,
+				Name:             "containerd-storage-path", // containerd storage
+				MountPath:        "/run/containerd",
+				MountPropagation: &hostContainerStorageMountPropagation,
+				ReadOnly:         true,
 			},
 			{
-				Name:      "docker-storage-path", // docker storage
-				MountPath: "/var/lib/docker",
-				ReadOnly:  true,
+				Name:             "docker-storage-path", // docker storage
+				MountPath:        "/var/lib/docker",
+				MountPropagation: &hostContainerStorageMountPropagation,
+				ReadOnly:         true,
 			},
 		},
 		Volumes: []corev1.Volume{
@@ -462,7 +475,6 @@ var defaultConfigs = map[string]DaemonSetConfig{
 	},
 	"bottlerocket": {
 		Args: []string{
-			"-enableKubeArmorHostPolicy",
 			"-criSocket=unix:///run/dockershim.sock",
 		},
 		Envs: envVar,
@@ -474,14 +486,16 @@ var defaultConfigs = map[string]DaemonSetConfig{
 				ReadOnly:  true,
 			},
 			{
-				Name:      "containerd-storage-path", // containerd storage
-				MountPath: "/run/containerd",
-				ReadOnly:  true,
+				Name:             "containerd-storage-path", // containerd storage
+				MountPath:        "/run/containerd",
+				MountPropagation: &hostContainerStorageMountPropagation,
+				ReadOnly:         true,
 			},
 			{
-				Name:      "docker-storage-path", // docker storage
-				MountPath: "/var/lib/docker",
-				ReadOnly:  true,
+				Name:             "docker-storage-path", // docker storage
+				MountPath:        "/var/lib/docker",
+				MountPropagation: &hostContainerStorageMountPropagation,
+				ReadOnly:         true,
 			},
 		},
 		Volumes: []corev1.Volume{
@@ -516,9 +530,7 @@ var defaultConfigs = map[string]DaemonSetConfig{
 		},
 	},
 	"aks": {
-		Args: []string{
-			"-enableKubeArmorHostPolicy",
-		},
+		Args: []string{},
 		Envs: envVar,
 		VolumeMounts: []corev1.VolumeMount{
 			apparmorVolMnt,
@@ -528,14 +540,16 @@ var defaultConfigs = map[string]DaemonSetConfig{
 				ReadOnly:  true,
 			},
 			{
-				Name:      "containerd-storage-path", // containerd storage
-				MountPath: "/run/containerd",
-				ReadOnly:  true,
+				Name:             "containerd-storage-path", // containerd storage
+				MountPath:        "/run/containerd",
+				MountPropagation: &hostContainerStorageMountPropagation,
+				ReadOnly:         true,
 			},
 			{
-				Name:      "docker-storage-path", // docker storage
-				MountPath: "/var/lib/docker",
-				ReadOnly:  true,
+				Name:             "docker-storage-path", // docker storage
+				MountPath:        "/var/lib/docker",
+				MountPropagation: &hostContainerStorageMountPropagation,
+				ReadOnly:         true,
 			},
 		},
 		Volumes: []corev1.Volume{

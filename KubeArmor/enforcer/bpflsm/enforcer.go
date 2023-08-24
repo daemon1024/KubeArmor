@@ -12,12 +12,14 @@ import (
 	"github.com/cilium/ebpf/link"
 	"github.com/cilium/ebpf/rlimit"
 
+	common "github.com/kubearmor/KubeArmor/KubeArmor/common"
 	cfg "github.com/kubearmor/KubeArmor/KubeArmor/config"
 	fd "github.com/kubearmor/KubeArmor/KubeArmor/feeder"
 	tp "github.com/kubearmor/KubeArmor/KubeArmor/types"
 )
 
 //go:generate go run github.com/cilium/ebpf/cmd/bpf2go -cc clang enforcer ../../BPF/enforcer.bpf.c -- -I/usr/include/bpf -O2 -g
+//go:generate go run github.com/cilium/ebpf/cmd/bpf2go -cc clang enforcer_path ../../BPF/enforcer_path.bpf.c -- -I/usr/include/bpf -O2 -g
 
 // ===================== //
 // == BPFLSM Enforcer == //
@@ -34,13 +36,14 @@ type BPFEnforcer struct {
 	ContainerMap     map[string]ContainerKV
 	ContainerMapLock *sync.RWMutex
 
-	obj enforcerObjects
+	obj     enforcerObjects
+	objPath enforcer_pathObjects
 
 	Probes map[string]link.Link
 }
 
 // NewBPFEnforcer instantiates a objects for setting up BPF LSM Enforcement
-func NewBPFEnforcer(node tp.Node, logger *fd.Feeder) (*BPFEnforcer, error) {
+func NewBPFEnforcer(node tp.Node, pinpath string, logger *fd.Feeder) (*BPFEnforcer, error) {
 
 	be := &BPFEnforcer{}
 
@@ -73,7 +76,7 @@ func NewBPFEnforcer(node tp.Node, logger *fd.Feeder) (*BPFEnforcer, error) {
 		InnerMap:   be.InnerMapSpec,
 		Name:       "kubearmor_containers",
 	}, ebpf.MapOptions{
-		PinPath: "/sys/fs/bpf",
+		PinPath: pinpath,
 	})
 	if err != nil {
 		be.Logger.Errf("error creating kubearmor_containers map: %s", err)
@@ -82,7 +85,7 @@ func NewBPFEnforcer(node tp.Node, logger *fd.Feeder) (*BPFEnforcer, error) {
 
 	if err := loadEnforcerObjects(&be.obj, &ebpf.CollectionOptions{
 		Maps: ebpf.MapOptions{
-			PinPath: "/sys/fs/bpf",
+			PinPath: pinpath,
 		},
 	}); err != nil {
 		be.Logger.Errf("error loading BPF LSM objects: %v", err)
@@ -107,6 +110,12 @@ func NewBPFEnforcer(node tp.Node, logger *fd.Feeder) (*BPFEnforcer, error) {
 		return be, err
 	}
 
+	be.Probes[be.obj.EnforceNetCreate.String()], err = link.AttachLSM(link.LSMOptions{Program: be.obj.EnforceNetCreate})
+	if err != nil {
+		be.Logger.Errf("opening lsm %s: %s", be.obj.EnforceNetCreate.String(), err)
+		return be, err
+	}
+
 	be.Probes[be.obj.EnforceNetConnect.String()], err = link.AttachLSM(link.LSMOptions{Program: be.obj.EnforceNetConnect})
 	if err != nil {
 		be.Logger.Errf("opening lsm %s: %s", be.obj.EnforceNetConnect.String(), err)
@@ -117,6 +126,85 @@ func NewBPFEnforcer(node tp.Node, logger *fd.Feeder) (*BPFEnforcer, error) {
 	if err != nil {
 		be.Logger.Errf("opening lsm %s: %s", be.obj.EnforceNetAccept.String(), err)
 		return be, err
+	}
+
+	/*
+		Path Hooks
+
+		Create, Link, Unlink, Symlink, Rename, MkDir, RmDir, Chowm, Chmod, Truncate
+
+		These will only work if the system has `CONFIG_SECURITY_PATH=y`
+
+		We only warn if we fail to load the following hooks
+	*/
+
+	if err := loadEnforcer_pathObjects(&be.objPath, &ebpf.CollectionOptions{
+		Maps: ebpf.MapOptions{
+			PinPath: common.GetMapRoot(),
+		},
+	}); err != nil {
+		be.Logger.Warnf("error loading BPF LSM Path objects. This usually suggests that the system doesn't have the system has `CONFIG_SECURITY_PATH=y`: %v", err)
+	} else {
+		be.Probes[be.objPath.EnforceMknod.String()], err = link.AttachLSM(link.LSMOptions{Program: be.objPath.EnforceMknod})
+		if err != nil {
+			be.Logger.Warnf("opening lsm %s: %s", be.objPath.EnforceMknod.String(), err)
+		}
+
+		be.Probes[be.objPath.EnforceLinkSrc.String()], err = link.AttachLSM(link.LSMOptions{Program: be.objPath.EnforceLinkSrc})
+		if err != nil {
+			be.Logger.Warnf("opening lsm %s: %s", be.objPath.EnforceLinkSrc.String(), err)
+		}
+
+		be.Probes[be.objPath.EnforceLinkDst.String()], err = link.AttachLSM(link.LSMOptions{Program: be.objPath.EnforceLinkDst})
+		if err != nil {
+			be.Logger.Warnf("opening lsm %s: %s", be.objPath.EnforceLinkDst.String(), err)
+		}
+
+		be.Probes[be.objPath.EnforceUnlink.String()], err = link.AttachLSM(link.LSMOptions{Program: be.objPath.EnforceUnlink})
+		if err != nil {
+			be.Logger.Warnf("opening lsm %s: %s", be.objPath.EnforceUnlink.String(), err)
+		}
+
+		be.Probes[be.objPath.EnforceSymlink.String()], err = link.AttachLSM(link.LSMOptions{Program: be.objPath.EnforceSymlink})
+		if err != nil {
+			be.Logger.Warnf("opening lsm %s: %s", be.objPath.EnforceSymlink.String(), err)
+		}
+
+		be.Probes[be.objPath.EnforceMkdir.String()], err = link.AttachLSM(link.LSMOptions{Program: be.objPath.EnforceMkdir})
+		if err != nil {
+			be.Logger.Warnf("opening lsm %s: %s", be.objPath.EnforceMkdir.String(), err)
+		}
+
+		be.Probes[be.objPath.EnforceChmod.String()], err = link.AttachLSM(link.LSMOptions{Program: be.objPath.EnforceChmod})
+		if err != nil {
+			be.Logger.Warnf("opening lsm %s: %s", be.objPath.EnforceChmod.String(), err)
+		}
+
+		// We do not support Chown for now because of limitations of bpf_trampoline https://github.com/iovisor/bcc/issues/3657
+		// be.Probes[be.objPath.EnforceChown.String()], err = link.AttachLSM(link.LSMOptions{Program: be.objPath.EnforceChown})
+		// if err != nil {
+		// 	be.Logger.Warnf("opening lsm %s: %s", be.objPath.EnforceChown.String(), err)
+		// }
+
+		be.Probes[be.objPath.EnforceTruncate.String()], err = link.AttachLSM(link.LSMOptions{Program: be.objPath.EnforceTruncate})
+		if err != nil {
+			be.Logger.Warnf("opening lsm %s: %s", be.objPath.EnforceTruncate.String(), err)
+		}
+
+		be.Probes[be.objPath.EnforceRenameNew.String()], err = link.AttachLSM(link.LSMOptions{Program: be.objPath.EnforceRenameNew})
+		if err != nil {
+			be.Logger.Warnf("opening lsm %s: %s", be.objPath.EnforceRenameNew.String(), err)
+		}
+
+		be.Probes[be.objPath.EnforceRenameOld.String()], err = link.AttachLSM(link.LSMOptions{Program: be.objPath.EnforceRenameOld})
+		if err != nil {
+			be.Logger.Warnf("opening lsm %s: %s", be.objPath.EnforceRenameOld.String(), err)
+		}
+
+		be.Probes[be.objPath.EnforceRmdir.String()], err = link.AttachLSM(link.LSMOptions{Program: be.objPath.EnforceRmdir})
+		if err != nil {
+			be.Logger.Warnf("opening lsm %s: %s", be.objPath.EnforceRmdir.String(), err)
+		}
 	}
 
 	if cfg.GlobalCfg.HostPolicy {
@@ -166,6 +254,9 @@ func (be *BPFEnforcer) DestroyBPFEnforcer() error {
 	}
 
 	for _, link := range be.Probes {
+		if link == nil {
+			continue
+		}
 		if err := link.Close(); err != nil {
 			be.Logger.Err(err.Error())
 			errBPFCleanUp = true

@@ -12,6 +12,13 @@ DLV_LPORT       := 2345
 DLV_RPORT       := $(shell expr $(DLV_LPORT) + $(NETNEXT))
 KUBEARMOR_PID    = $(shell pgrep kubearmor)
 
+ifeq (, $(shell which govvv))
+$(shell go install github.com/ahmetb/govvv)	# This works for older go version
+$(shell go install github.com/ahmetb/govvv@latest) # This works for new go version
+endif
+
+GIT_INFO := $(shell govvv -flags)
+
 .PHONY: build
 build: protobuf
 	cd $(CURDIR); go mod tidy
@@ -25,7 +32,7 @@ ifneq (, $(shell which llvm-strip))
 	fi
 endif
 endif
-	cd $(CURDIR); go build -o kubearmor main.go
+	cd $(CURDIR); CGO_ENABLED=0 go build -ldflags "$(GIT_INFO)" -o kubearmor main.go
 
 .PHONY: protobuf
 protobuf:
@@ -43,7 +50,7 @@ run: build
 	cd $(CURDIR); sudo rm -f /tmp/kubearmor.log
 	cd $(CURDIR)/BPF; make clean
 	cd $(CURDIR)/BPF; make
-	cd $(CURDIR); sudo -E ./kubearmor -logPath=/tmp/kubearmor.log -enableKubeArmorPolicy -enableKubeArmorHostPolicy -hostVisibility=process,file,network,capabilities
+	cd $(CURDIR); sudo -E ./kubearmor -logPath=/tmp/kubearmor.log -enableKubeArmorPolicy -enableKubeArmorHostPolicy -hostVisibility=process,file,network,capabilities -defaultFilePosture block -defaultCapabilitiesPosture block -defaultNetworkPosture block -hostDefaultFilePosture block -hostDefaultCapabilitiesPosture block -hostDefaultNetworkPosture block
 
 .PHONY: run-container
 run-container: build
@@ -119,6 +126,24 @@ endif
 	cd $(CURDIR); curl -sfL https://raw.githubusercontent.com/kubearmor/kubearmor-client/main/install.sh | sh -s -- -b .
 	cd $(CURDIR); VERSION=$(shell git describe --tags --always --dirty) goreleaser release --rm-dist --skip-publish --skip-sign --skip-validate --snapshot
 
+.PHONY: scan
+scan: 
+	go install golang.org/x/vuln/cmd/govulncheck@latest ;\
+	cd $(CURDIR);\
+	govulncheck -v ./... ;\
+	cd $(CURDIR)/BPF/tests;\
+	govulncheck -v ./... ;\
+	cd $(CURDIR)/../deployments;\
+	govulncheck -v ./... ;\
+	cd $(CURDIR)/../pkg/KubeArmorAnnotation ;\
+	govulncheck -v ./... ;\
+	cd $(CURDIR)/../pkg/KubeArmorController ;\
+	govulncheck -v ./... ;\
+	cd $(CURDIR)/../pkg/KubeArmorHostPolicy ;\
+	govulncheck -v ./... ;\
+	cd $(CURDIR)/../pkg/KubeArmorPolicy ;\
+	govulncheck -v ./... ;\
+
 .PHONY: clean
 clean:
 	cd $(CURDIR); sudo rm -rf kubearmor karmor dist /tmp/kubearmor.log
@@ -163,3 +188,4 @@ ifeq ($(KUBEARMOR_PID), )
 	$(error kubearmor must be running - execute 'make run' first)
 endif
 	sudo $(DLV_EXEC) attach $(KUBEARMOR_PID) --headless -l=:$(DLV_LPORT) --log --api-version 2 $(CURDIR)
+

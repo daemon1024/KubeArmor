@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2021 Authors of KubeArmor
 
+// Package enforcer is responsible for setting up and handling policy updates for supported enforcers including AppArmor, SELinux and BPFLSM
 package enforcer
 
 import (
-	"io/ioutil"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -97,7 +97,7 @@ func NewAppArmorEnforcer(node tp.Node, logger *fd.Feeder) *AppArmorEnforcer {
 	ae.AppArmorProfiles = map[string][]string{}
 	ae.AppArmorProfilesLock = &sync.RWMutex{}
 
-	files, err := ioutil.ReadDir("/etc/apparmor.d")
+	files, err := os.ReadDir("/etc/apparmor.d")
 	if err != nil {
 		ae.Logger.Errf("Failed to read /etc/apparmor.d (%s)", err.Error())
 		return nil
@@ -105,11 +105,11 @@ func NewAppArmorEnforcer(node tp.Node, logger *fd.Feeder) *AppArmorEnforcer {
 
 	existingProfiles := []string{}
 
-	if pids, err := ioutil.ReadDir(filepath.Clean("/proc")); err == nil {
+	if pids, err := os.ReadDir(filepath.Clean("/proc")); err == nil {
 		for _, f := range pids {
 			if f.IsDir() {
 				if _, err := strconv.Atoi(f.Name()); err == nil {
-					if content, err := ioutil.ReadFile(filepath.Clean("/proc/" + f.Name() + "/attr/current")); err == nil {
+					if content, err := os.ReadFile(filepath.Clean("/proc/" + f.Name() + "/attr/current")); err == nil {
 						line := strings.Split(string(content), "\n")[0]
 						words := strings.Split(line, " ")
 
@@ -124,14 +124,14 @@ func NewAppArmorEnforcer(node tp.Node, logger *fd.Feeder) *AppArmorEnforcer {
 	}
 
 	for _, file := range files {
-		if !file.Mode().IsRegular() {
+		if !file.Type().IsRegular() {
 			ae.Logger.Printf("skipping /etc/apparmor.d/%s since not a regular file", file.Name())
 			continue
 		}
 
 		fileName := file.Name()
 
-		data, err := ioutil.ReadFile(filepath.Clean("/etc/apparmor.d/" + fileName))
+		data, err := os.ReadFile(filepath.Clean("/etc/apparmor.d/" + fileName))
 		if err != nil {
 			ae.Logger.Errf("Failed to read /etc/apparmor.d/%s (%s)", fileName, err.Error())
 			continue
@@ -201,7 +201,7 @@ func (ae *AppArmorEnforcer) RegisterAppArmorProfile(podName, profileName string)
 	defer ae.AppArmorProfilesLock.Unlock()
 
 	if _, err := os.Stat(filepath.Clean("/etc/apparmor.d/" + profileName)); err == nil {
-		if content, err := ioutil.ReadFile(filepath.Clean("/etc/apparmor.d/" + profileName)); err != nil {
+		if content, err := os.ReadFile(filepath.Clean("/etc/apparmor.d/" + profileName)); err != nil {
 			ae.Logger.Warnf("Unable to register the AppArmor profile (%s, %s))", profileName, err.Error())
 			return false
 		} else if !strings.Contains(string(content), "KubeArmor") {
@@ -266,14 +266,11 @@ func (ae *AppArmorEnforcer) UnregisterAppArmorProfile(podName, profileName strin
 				}
 			}
 
-			if len(ae.AppArmorProfiles[profileName]) > 0 {
-				ae.Logger.Printf("Removed %s from the pod list of the AppArmor profile (%s, %d)", podName, profileName, len(ae.AppArmorProfiles[profileName]))
-				return true
-			}
-		} else {
-			ae.Logger.Warnf("Unable to find %s from the AppArmor profiles", profileName)
-			return false
+			ae.Logger.Printf("Removed %s from the pod list of the AppArmor profile (%s, %d)", podName, profileName, len(ae.AppArmorProfiles[profileName]))
+			return true
 		}
+		ae.Logger.Warnf("Unable to find %s from the AppArmor profiles", profileName)
+		return false
 	}
 
 	if _, err := os.Stat(filepath.Clean("/etc/apparmor.d/" + profileName)); err != nil {
@@ -281,7 +278,7 @@ func (ae *AppArmorEnforcer) UnregisterAppArmorProfile(podName, profileName strin
 		return false
 	}
 
-	if content, err := ioutil.ReadFile(filepath.Clean("/etc/apparmor.d/" + profileName)); err != nil {
+	if content, err := os.ReadFile(filepath.Clean("/etc/apparmor.d/" + profileName)); err != nil {
 		ae.Logger.Warnf("Unable to read the AppArmor profile (%s, %s)", profileName, err.Error())
 		return false
 	} else if !strings.Contains(string(content), "KubeArmor") {
@@ -354,6 +351,7 @@ func (ae *AppArmorEnforcer) CreateAppArmorHostProfile() error {
 		"  umount,\n" +
 		"  signal,\n" +
 		"  unix,\n" +
+		"  ptrace,\n" +
 		"\n" +
 		"  file,\n" +
 		"  network,\n" +

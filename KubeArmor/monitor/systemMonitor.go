@@ -13,9 +13,12 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
+	"time"
 
 	cle "github.com/cilium/ebpf"
+
 	"github.com/cilium/ebpf/link"
 	"github.com/cilium/ebpf/perf"
 	"github.com/cilium/ebpf/rlimit"
@@ -30,6 +33,11 @@ import (
 const (
 	PermissionDenied = -13
 	MaxStringLen     = 4096
+	PinPath          = "/sys/fs/bpf"
+	visibilityOff    = uint32(1)
+	visibilityOn     = uint32(0)
+	// how many event the channel can hold
+	SyscallChannelSize = 1 << 13 //8192
 )
 
 // ======================= //
@@ -40,6 +48,15 @@ const (
 type NsKey struct {
 	PidNS uint32
 	MntNS uint32
+}
+
+// NsVisibility Structure
+type NsVisibility struct {
+	NsKeys     []NsKey
+	File       bool
+	Process    bool
+	Capability bool
+	Network    bool
 }
 
 // ===================== //
@@ -89,7 +106,8 @@ func init() {
 // SystemMonitor Structure
 type SystemMonitor struct {
 	// node
-	Node *tp.Node
+	Node     *tp.Node
+	NodeLock **sync.RWMutex
 
 	// logs
 	Logger *fd.Feeder
@@ -106,8 +124,15 @@ type SystemMonitor struct {
 	NsMap     map[NsKey]string
 	NsMapLock *sync.RWMutex
 
-	// system monitor (for container)
-	BpfModule *cle.Collection
+	// system monitor
+	BpfModule            *cle.Collection
+	BpfNsVisibilityMap   *cle.Map
+	BpfVisibilityMapSpec cle.MapSpec
+
+	NsVisibilityMap  map[NsKey]*cle.Map
+	NamespacePidsMap map[string]NsVisibility
+	BpfMapLock       *sync.RWMutex
+	PinPath          string
 
 	// Probes Links
 	Probes map[string]link.Link
@@ -122,17 +147,23 @@ type SystemMonitor struct {
 	// lists to skip
 	UntrackedNamespaces []string
 
+	execLogMap     map[uint32]tp.Log
+	execLogMapLock *sync.RWMutex
+	// monitor lock
+	MonitorLock **sync.RWMutex
+
 	Status          bool
 	UptimeTimeStamp float64
 	HostByteOrder   binary.ByteOrder
 }
 
 // NewSystemMonitor Function
-func NewSystemMonitor(node *tp.Node, logger *fd.Feeder, containers *map[string]tp.Container, containersLock **sync.RWMutex,
-	activeHostPidMap *map[string]tp.PidMap, activePidMapLock **sync.RWMutex) *SystemMonitor {
+func NewSystemMonitor(node *tp.Node, nodeLock **sync.RWMutex, logger *fd.Feeder, containers *map[string]tp.Container, containersLock **sync.RWMutex,
+	activeHostPidMap *map[string]tp.PidMap, activePidMapLock **sync.RWMutex, monitorLock **sync.RWMutex) *SystemMonitor {
 	mon := new(SystemMonitor)
 
 	mon.Node = node
+	mon.NodeLock = nodeLock
 	mon.Logger = logger
 
 	mon.Containers = containers
@@ -148,9 +179,27 @@ func NewSystemMonitor(node *tp.Node, logger *fd.Feeder, containers *map[string]t
 
 	mon.UntrackedNamespaces = []string{"kube-system", "kubearmor"}
 
+	mon.MonitorLock = monitorLock
+
 	mon.Status = true
 	mon.UptimeTimeStamp = kl.GetUptimeTimestamp()
 	mon.HostByteOrder = binary.LittleEndian
+
+	mon.execLogMap = map[uint32]tp.Log{}
+	mon.execLogMapLock = new(sync.RWMutex)
+
+	mon.BpfMapLock = new(sync.RWMutex)
+	mon.NsVisibilityMap = make(map[NsKey]*cle.Map)
+	mon.NamespacePidsMap = make(map[string]NsVisibility)
+	mon.BpfVisibilityMapSpec = cle.MapSpec{
+		Type:       cle.Array,
+		KeySize:    4,
+		ValueSize:  4,
+		MaxEntries: 4,
+	}
+
+	kl.CheckOrMountBPFFs(cfg.GlobalCfg.BPFFsPath)
+	mon.PinPath = kl.GetMapRoot()
 
 	return mon
 }
@@ -200,6 +249,155 @@ func isIgnored(item string, ignoreList []string) bool {
 	return false
 }
 
+// InitBPFMaps Function
+func (mon *SystemMonitor) initBPFMaps() error {
+	visibilityMap, err := cle.NewMapWithOptions(
+		&cle.MapSpec{
+			Name:       "kubearmor_visibility",
+			Type:       cle.HashOfMaps,
+			KeySize:    8,
+			ValueSize:  4,
+			MaxEntries: 65535,
+			Pinning:    cle.PinByName,
+			InnerMap:   &mon.BpfVisibilityMapSpec,
+		}, cle.MapOptions{
+			PinPath: mon.PinPath,
+		})
+	mon.BpfNsVisibilityMap = visibilityMap
+	mon.UpdateHostVisibility()
+
+	return err
+}
+
+// DestroyBPFMaps Function
+func (mon *SystemMonitor) DestroyBPFMaps() {
+	if mon.BpfNsVisibilityMap == nil {
+		return
+	}
+
+	err := mon.BpfNsVisibilityMap.Unpin()
+	if err != nil {
+		mon.Logger.Warnf("error unpinning bpf map kubearmor_visibility %v", err)
+	}
+	err = mon.BpfNsVisibilityMap.Close()
+	if err != nil {
+		mon.Logger.Warnf("error closing bpf map kubearmor_visibility %v", err)
+	}
+}
+
+// UpdateNsKeyMap Function
+func (mon *SystemMonitor) UpdateNsKeyMap(action string, nsKey NsKey, visibility tp.Visibility) {
+	var err error
+
+	file := cle.MapKV{
+		Key:   uint32(0),
+		Value: visibilityOff,
+	}
+	process := cle.MapKV{
+		Key:   uint32(1),
+		Value: visibilityOff,
+	}
+	network := cle.MapKV{
+		Key:   uint32(2),
+		Value: visibilityOff,
+	}
+	capability := cle.MapKV{
+		Key:   uint32(3),
+		Value: visibilityOff,
+	}
+	if visibility.File {
+		file.Value = visibilityOn
+	}
+	if visibility.Process {
+		process.Value = visibilityOn
+	}
+	if visibility.Capabilities {
+		capability.Value = visibilityOn
+	}
+	if visibility.Network {
+		network.Value = visibilityOn
+	}
+
+	if action == "ADDED" {
+		spec := mon.BpfVisibilityMapSpec
+		spec.Contents = append(spec.Contents, file)
+		spec.Contents = append(spec.Contents, process)
+		spec.Contents = append(spec.Contents, network)
+		spec.Contents = append(spec.Contents, capability)
+		visibilityMap, err := cle.NewMap(&spec)
+		if err != nil {
+			mon.Logger.Warnf("Cannot create bpf map %s", err)
+			return
+		}
+		mon.NsVisibilityMap[nsKey] = visibilityMap
+		err = mon.BpfNsVisibilityMap.Put(nsKey, visibilityMap)
+		if err != nil {
+			mon.Logger.Warnf("Cannot insert insert visibility map into kernel nskey=%+v, error=%s", nsKey, err)
+		}
+		mon.Logger.Printf("Successfully added visibility map with key=%+v to the kernel", nsKey)
+	} else if action == "MODIFIED" {
+		visibilityMap := mon.NsVisibilityMap[nsKey]
+		if visibilityMap == nil {
+			mon.Logger.Warnf("Cannot locate visibility map. nskey=%+v, action=modified", nsKey)
+			return
+		}
+
+		err = visibilityMap.Put(file.Key, file.Value)
+		if err != nil {
+			mon.Logger.Warnf("Cannot update visibility map. nskey=%+v, value=%+v, scope=file", nsKey, file.Value)
+		}
+		err = visibilityMap.Put(process.Key, process.Value)
+		if err != nil {
+			mon.Logger.Warnf("Cannot update visibility map. nskey=%+v, value=%+v, scope=process", nsKey, process.Value)
+		}
+		err = visibilityMap.Put(network.Key, network.Value)
+		if err != nil {
+			mon.Logger.Warnf("Cannot update visibility map. nskey=%+v, value=%+v, scope=network", nsKey, network.Value)
+		}
+		err = visibilityMap.Put(capability.Key, capability.Value)
+		if err != nil {
+			mon.Logger.Warnf("Cannot update visibility map. nskey=%+v, value=%+v, scope=capability", nsKey, capability.Value)
+		}
+		mon.Logger.Printf("Updated visibility map with key=%+v for cid %s", nsKey, mon.NsMap[nsKey])
+	} else if action == "DELETED" {
+		err := mon.BpfNsVisibilityMap.Delete(nsKey)
+		if err != nil {
+			mon.Logger.Warnf("Cannot locate visibility map. nskey=%+v, action=deleted", nsKey)
+			return
+		}
+		delete(mon.NsVisibilityMap, nsKey)
+		mon.Logger.Printf("Successfully deleted visibility map with key=%+v from the kernel", nsKey)
+	}
+}
+
+// UpdateHostVisibility Function
+func (mon *SystemMonitor) UpdateHostVisibility() {
+	nsKey := NsKey{
+		PidNS: 0,
+		MntNS: 0,
+	}
+
+	visibility := tp.Visibility{}
+	if cfg.GlobalCfg.HostPolicy {
+		visibilityParams := cfg.GlobalCfg.HostVisibility
+		if strings.Contains(visibilityParams, "file") {
+			visibility.File = true
+		}
+		if strings.Contains(visibilityParams, "process") {
+			visibility.Process = true
+		}
+		if strings.Contains(visibilityParams, "network") {
+			visibility.Network = true
+		}
+		if strings.Contains(visibilityParams, "capabilities") {
+			visibility.Capabilities = true
+		}
+	}
+	mon.BpfMapLock.Lock()
+	defer mon.BpfMapLock.Unlock()
+	mon.UpdateNsKeyMap("ADDED", nsKey, visibility)
+}
+
 // InitBPF Function
 func (mon *SystemMonitor) InitBPF() error {
 	homeDir, err := filepath.Abs(filepath.Dir(os.Args[0]))
@@ -222,11 +420,6 @@ func (mon *SystemMonitor) InitBPF() error {
 		}
 	}
 
-	ignoreList, err := loadIgnoreList(bpfPath)
-	if err != nil {
-		return err
-	}
-
 	mon.Logger.Print("Initializing eBPF system monitor")
 
 	// Allow the current process to lock memory for eBPF resources.
@@ -241,8 +434,24 @@ func (mon *SystemMonitor) InitBPF() error {
 	} else if cfg.GlobalCfg.Policy && cfg.GlobalCfg.HostPolicy { // container and host
 		bpfPath = bpfPath + "system_monitor.bpf.o"
 	}
+
+	err = mon.initBPFMaps()
+	if err != nil {
+		return err
+	}
 	mon.Logger.Printf("eBPF system monitor object file path: %s", bpfPath)
-	mon.BpfModule, err = cle.LoadCollection(bpfPath)
+	bpfModuleSpec, err := cle.LoadCollectionSpec(bpfPath)
+	if err != nil {
+		return fmt.Errorf("cannot load bpf module specs %v", err)
+	}
+	mon.BpfModule, err = cle.NewCollectionWithOptions(
+		bpfModuleSpec,
+		cle.CollectionOptions{
+			Maps: cle.MapOptions{
+				PinPath: PinPath,
+			},
+		},
+	)
 	if err != nil {
 		return fmt.Errorf("bpf module is nil %v", err)
 	}
@@ -250,10 +459,10 @@ func (mon *SystemMonitor) InitBPF() error {
 	mon.Logger.Print("Initialized the eBPF system monitor")
 
 	// sysPrefix := bcc.GetSyscallPrefix()
-	systemCalls := []string{"open", "openat", "execve", "execveat", "socket", "connect", "accept", "bind", "listen", "unlink", "unlinkat", "rmdir", "chown", "setuid", "setgid", "fchownat"}
+	systemCalls := []string{"open", "openat", "execve", "execveat", "socket", "connect", "accept", "bind", "listen", "unlink", "unlinkat", "rmdir", "ptrace", "chown", "setuid", "setgid", "fchownat", "mount", "umount"}
 	// {category, event}
 	sysTracepoints := [][2]string{{"syscalls", "sys_exit_openat"}}
-	sysKprobes := []string{"do_exit", "security_bprm_check", "security_file_open", "security_path_unlink", "security_path_rmdir"}
+	sysKprobes := []string{"do_exit", "security_bprm_check", "security_file_open", "security_path_mknod", "security_path_unlink", "security_path_rmdir", "security_ptrace_access_check"}
 	netSyscalls := []string{"tcp_connect"}
 	netRetSyscalls := []string{"inet_csk_accept"}
 
@@ -262,18 +471,14 @@ func (mon *SystemMonitor) InitBPF() error {
 		mon.Probes = make(map[string]link.Link)
 
 		for _, syscallName := range systemCalls {
-			if isIgnored(syscallName, ignoreList) {
-				mon.Logger.Printf("Ignoring syscall %s", syscallName)
-				continue
-			}
 			mon.Probes["kprobe__"+syscallName], err = link.Kprobe("sys_"+syscallName, mon.BpfModule.Programs["kprobe__"+syscallName], nil)
 			if err != nil {
-				return fmt.Errorf("error loading kprobe %s: %v", syscallName, err)
+				mon.Logger.Warnf("error loading kprobe %s: %v", syscallName, err)
 			}
 
 			mon.Probes["kretprobe__"+syscallName], err = link.Kretprobe("sys_"+syscallName, mon.BpfModule.Programs["kretprobe__"+syscallName], nil)
 			if err != nil {
-				return fmt.Errorf("error loading kretprobe %s: %v", syscallName, err)
+				mon.Logger.Warnf("error loading kretprobe %s: %v", syscallName, err)
 			}
 
 		}
@@ -281,48 +486,36 @@ func (mon *SystemMonitor) InitBPF() error {
 		for _, sysTracepoint := range sysTracepoints {
 			mon.Probes[sysTracepoint[1]], err = link.Tracepoint(sysTracepoint[0], sysTracepoint[1], mon.BpfModule.Programs[sysTracepoint[1]], nil)
 			if err != nil {
-				return fmt.Errorf("error:%s: %v", sysTracepoint, err)
+				mon.Logger.Warnf("error:%s: %v", sysTracepoint, err)
 			}
 		}
 
 		for _, sysKprobe := range sysKprobes {
-			if isIgnored(sysKprobe, ignoreList) {
-				mon.Logger.Printf("Ignoring kprobe %s", sysKprobe)
-				continue
-			}
 			mon.Probes["kprobe__"+sysKprobe], err = link.Kprobe(sysKprobe, mon.BpfModule.Programs["kprobe__"+sysKprobe], nil)
 			if err != nil {
-				return fmt.Errorf("error loading kprobe %s: %v", sysKprobe, err)
+				mon.Logger.Warnf("error loading kprobe %s: %v", sysKprobe, err)
 			}
 		}
 
 		for _, netSyscall := range netSyscalls {
-			if isIgnored(netSyscall, ignoreList) {
-				mon.Logger.Printf("Ignoring syscall %s", netSyscall)
-				continue
-			}
 			mon.Probes["kprobe__"+netSyscall], err = link.Kprobe(netSyscall, mon.BpfModule.Programs["kprobe__"+netSyscall], nil)
 			if err != nil {
-				return fmt.Errorf("error loading kprobe %s: %v", netSyscall, err)
+				mon.Logger.Warnf("error loading kprobe %s: %v", netSyscall, err)
 			}
 		}
 
 		for _, netRetSyscall := range netRetSyscalls {
-			if isIgnored(netRetSyscall, ignoreList) {
-				mon.Logger.Printf("Ignoring syscall %s", netRetSyscall)
-				continue
-			}
 			mon.Probes["kretprobe__"+netRetSyscall], err = link.Kretprobe(netRetSyscall, mon.BpfModule.Programs["kretprobe__"+netRetSyscall], nil)
 			if err != nil {
-				return fmt.Errorf("error loading kretprobe %s: %v", netRetSyscall, err)
+				mon.Logger.Warnf("error loading kretprobe %s: %v", netRetSyscall, err)
 			}
 		}
 
-		mon.SyscallChannel = make(chan []byte, 8192)
+		mon.SyscallChannel = make(chan []byte, SyscallChannelSize)
 
 		mon.SyscallPerfMap, err = perf.NewReader(mon.BpfModule.Maps["sys_events"], os.Getpagesize()*1024)
 		if err != nil {
-			return fmt.Errorf("error initializing events perf map: %v", err)
+			mon.Logger.Warnf("error initializing events perf map: %v", err)
 		}
 	}
 
@@ -331,6 +524,10 @@ func (mon *SystemMonitor) InitBPF() error {
 
 // DestroySystemMonitor Function
 func (mon *SystemMonitor) DestroySystemMonitor() error {
+
+	(*mon.MonitorLock).Lock()
+	defer (*mon.MonitorLock).Unlock()
+
 	mon.Status = false
 
 	if mon.SyscallPerfMap != nil {
@@ -353,6 +550,7 @@ func (mon *SystemMonitor) DestroySystemMonitor() error {
 		}
 	}
 
+	mon.DestroyBPFMaps()
 	return nil
 }
 
@@ -393,7 +591,40 @@ func (mon *SystemMonitor) TraceSyscall() {
 	Containers := *(mon.Containers)
 	ContainersLock := *(mon.ContainersLock)
 
-	execLogMap := map[uint32]tp.Log{}
+	ReplayChannel := make(chan []byte, SyscallChannelSize)
+
+	go func() {
+		for {
+			dataRaw, valid := <-ReplayChannel
+			if !valid {
+				continue
+			}
+			dataBuff := bytes.NewBuffer(dataRaw)
+			ctx, err := readContextFromBuff(dataBuff)
+			if err != nil {
+				continue
+			}
+
+			now := time.Now()
+			if now.After(time.Unix(int64(ctx.Ts), 0).Add(5 * time.Second)) {
+				mon.Logger.Warn("Event dropped due to replay timeout")
+				continue
+			}
+
+			// Best effort replay
+			go func() {
+				time.Sleep(1 * time.Second)
+				select {
+				case mon.SyscallChannel <- dataRaw:
+				default:
+					// channel is full, wait for a short time before retrying
+					time.Sleep(1 * time.Second)
+					mon.Logger.Warn("Event droped due to busy event channel")
+				}
+			}()
+		}
+	}()
+	MonitorLock := *(mon.MonitorLock)
 
 	for {
 		select {
@@ -431,6 +662,7 @@ func (mon *SystemMonitor) TraceSyscall() {
 			}
 
 			if ctx.PidID != 0 && ctx.MntID != 0 && containerID == "" {
+				ReplayChannel <- dataRaw
 				continue
 			}
 
@@ -464,6 +696,10 @@ func (mon *SystemMonitor) TraceSyscall() {
 				if len(args) != 1 {
 					continue
 				}
+			} else if ctx.EventID == SysPtrace {
+				if len(args) != 3 {
+					continue
+				}
 			} else if ctx.EventID == SysChown {
 				if len(args) != 3 {
 					continue
@@ -478,6 +714,14 @@ func (mon *SystemMonitor) TraceSyscall() {
 				}
 			} else if ctx.EventID == SysSetgid {
 				if len(args) != 1 {
+					continue
+				}
+			} else if ctx.EventID == SysMount {
+				if len(args) != 5 {
+					continue
+				}
+			} else if ctx.EventID == SysUmount {
+				if len(args) != 2 {
 					continue
 				}
 
@@ -518,7 +762,9 @@ func (mon *SystemMonitor) TraceSyscall() {
 					log.Data = "syscall=" + getSyscallName(int32(ctx.EventID))
 
 					// store the log in the map
-					execLogMap[ctx.HostPID] = log
+					mon.execLogMapLock.Lock()
+					mon.execLogMap[ctx.HostPID] = log
+					mon.execLogMapLock.Unlock()
 
 				} else if len(args) == 0 { // return
 					// if Policy is not set
@@ -532,10 +778,12 @@ func (mon *SystemMonitor) TraceSyscall() {
 					}
 
 					// get the stored log
-					log := execLogMap[ctx.HostPID]
+					mon.execLogMapLock.Lock()
+					log := mon.execLogMap[ctx.HostPID]
 
 					// remove the log from the map
-					delete(execLogMap, ctx.HostPID)
+					delete(mon.execLogMap, ctx.HostPID)
+					mon.execLogMapLock.Unlock()
 
 					// update the log again
 					log = mon.UpdateLogBase(ctx.EventID, log)
@@ -605,7 +853,9 @@ func (mon *SystemMonitor) TraceSyscall() {
 					log.Data = "syscall=" + getSyscallName(int32(ctx.EventID)) + " fd=" + fd + " flag=" + procExecFlag
 
 					// store the log in the map
-					execLogMap[ctx.HostPID] = log
+					mon.execLogMapLock.Lock()
+					mon.execLogMap[ctx.HostPID] = log
+					mon.execLogMapLock.Unlock()
 
 				} else if len(args) == 0 { // return
 					// if Policy is not set
@@ -619,10 +869,12 @@ func (mon *SystemMonitor) TraceSyscall() {
 					}
 
 					// get the stored log
-					log := execLogMap[ctx.HostPID]
+					mon.execLogMapLock.Lock()
+					log := mon.execLogMap[ctx.HostPID]
 
 					// remove the log from the map
-					delete(execLogMap, ctx.HostPID)
+					delete(mon.execLogMap, ctx.HostPID)
+					mon.execLogMapLock.Unlock()
 
 					// update the log again
 					log = mon.UpdateLogBase(ctx.EventID, log)
@@ -667,9 +919,10 @@ func (mon *SystemMonitor) TraceSyscall() {
 					continue
 				}
 			}
-
+			MonitorLock.Lock()
 			// push the context to the channel for logging
 			mon.ContextChan <- ContextCombined{ContainerID: containerID, ContextSys: ctx, ContextArgs: args}
+			MonitorLock.Unlock()
 		}
 	}
 }
