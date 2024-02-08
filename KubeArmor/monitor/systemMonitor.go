@@ -18,6 +18,7 @@ import (
 
 	cle "github.com/cilium/ebpf"
 
+	"github.com/cilium/ebpf/btf"
 	"github.com/cilium/ebpf/link"
 	"github.com/cilium/ebpf/perf"
 	"github.com/cilium/ebpf/rlimit"
@@ -444,7 +445,7 @@ func (mon *SystemMonitor) InitBPF() error {
 	if err := rlimit.RemoveMemlock(); err != nil {
 		return fmt.Errorf("error removing memlock %v", err)
 	}
-
+	btfPath := bpfPath + "custom.btf"
 	bpfPath = bpfPath + "system_monitor.bpf.o"
 
 	err = mon.initBPFMaps()
@@ -456,11 +457,19 @@ func (mon *SystemMonitor) InitBPF() error {
 	if err != nil {
 		return fmt.Errorf("cannot load bpf module specs %v", err)
 	}
+
+	btfSpec, err := btf.LoadSpec(btfPath)
+	if err != nil {
+		return fmt.Errorf("Unable to load btf file: %v", err)
+	}
 	mon.BpfModule, err = cle.NewCollectionWithOptions(
 		bpfModuleSpec,
 		cle.CollectionOptions{
 			Maps: cle.MapOptions{
 				PinPath: PinPath,
+			},
+			Programs: cle.ProgramOptions{
+				KernelTypes: btfSpec,
 			},
 		},
 	)

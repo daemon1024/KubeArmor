@@ -65,7 +65,6 @@
 
 #define TASK_COMM_LEN 16
 #define CWD_LEN 80
-#define TTY_LEN 64
 
 #define MAX_BUFFER_SIZE 32768
 #define MAX_STRING_SIZE 4096
@@ -86,6 +85,8 @@
 #define PTRACE_REQ_T 23UL
 #define MOUNT_FLAG_T 24UL
 #define UMOUNT_FLAG_T 25UL
+
+#define BPF_ANY		0
 
 #define MAX_ARGS 6
 #define ENC_ARG_TYPE(n, type) type << (8 * n)
@@ -108,6 +109,31 @@
 #endif
 
 #define UNDEFINED_SYSCALL 1000
+
+/*
+vizdata = int[256]
+vizdata = bpf_map_lookup(key)
+if (vizdata[syscall_id] == true/false){
+00000000
+
+chown = 00000001
+ptrace = 00000010
+mount = 01000000
+umount = 10000000
+
+vizdata = 01000011
+
+vizdata & chown = true
+vizdata & umount = false
+
+// how to enable umount now
+vizdata = vizdata | umount
+vizdata = 11000011
+
+Now
+vizdata & umount = 
+}
+*/
 
 #if defined(bpf_target_x86)
 enum
@@ -220,7 +246,6 @@ typedef struct __attribute__((__packed__)) sys_context
 
     char comm[TASK_COMM_LEN];
     char cwd[CWD_LEN];
-    char tty[TTY_LEN];
     u32 oid; // owner id
 } sys_context_t;
 
@@ -352,14 +377,14 @@ struct kaconfig kubearmor_config SEC(".maps");
 
 static __always_inline u32 get_pid_ns_id(struct nsproxy *ns)
 {
-    struct pid_namespace *pidns = READ_KERN(ns->pid_ns_for_children);
-    return READ_KERN(pidns->ns.inum);
+    struct pid_namespace *pidns = READ_KERN(ns->pid_ns);
+    return READ_KERN(pidns->proc_inum);
 }
 
 static __always_inline u32 get_mnt_ns_id(struct nsproxy *ns)
 {
     struct mnt_namespace *mntns = READ_KERN(ns->mnt_ns);
-    return READ_KERN(mntns->ns.inum);
+    return READ_KERN(mntns->proc_inum);
 }
 
 static inline struct mount *real_mount(struct vfsmount *mnt)
@@ -381,11 +406,8 @@ static __always_inline u32 get_task_pid_vnr(struct task_struct *task)
 {
     struct pid *pid = NULL;
 
-#if (LINUX_VERSION_CODE < KERNEL_VERSION(4, 19, 0) && !defined(RHEL_RELEASE_GT_8_0) && !defined(BTF_SUPPORTED))
+// #if (LINUX_VERSION_CODE < KERNEL_VERSION(4, 19, 0) && !defined(RHEL_RELEASE_GT_8_0) && !defined(BTF_SUPPORTED))
     pid = READ_KERN(task->pids[PIDTYPE_PID].pid);
-#else
-    pid = READ_KERN(task->thread_pid);
-#endif
 
     unsigned int level = READ_KERN(pid->level);
     return READ_KERN(pid->numbers[level].nr);
@@ -919,7 +941,7 @@ static __always_inline int events_perf_submit(struct pt_regs *ctx)
     void *data = bufs_p->buf;
     int size = *off & (MAX_BUFFER_SIZE - 1);
 
-    return bpf_perf_event_output(ctx, &sys_events, BPF_F_CURRENT_CPU, data, size);
+    return bpf_perf_event_output(ctx, &sys_events, 0, data, size);
 }
 
 // == Full Path == //
@@ -998,35 +1020,26 @@ static __always_inline u32 init_context(sys_context_t *context)
 
     bpf_get_current_comm(&context->comm, sizeof(context->comm));
 
-    // check if tty is attached
-    struct signal_struct *signal;
-    signal = READ_KERN(task->signal);
-    if (signal != NULL){
-        struct tty_struct *tty = READ_KERN(signal->tty);
-        if (tty != NULL){
-            // a tty is attached
-            bpf_probe_read_str(&context->tty, TTY_LEN, (void *)tty->name);
-        }
-    }
-    
-    // get cwd
-    fs = READ_KERN(task->fs);
-    struct path path = READ_KERN(fs->pwd);
+    bpf_printk("comm %s", context->comm);
 
-    bufs_t *string_p = get_buffer(CWD_BUF_TYPE);
-    if (string_p == NULL)
-        return 0;
+    // // get cwd
+    // fs = READ_KERN(task->fs);
+    // struct path path = READ_KERN(fs->pwd);
 
-    if (!prepend_path(&path, string_p, CWD_BUF_TYPE))
-    {
-        return 0;
-    }
+    // bufs_t *string_p = get_buffer(CWD_BUF_TYPE);
+    // if (string_p == NULL)
+    //     return 0;
 
-    u32 *off = get_buffer_offset(CWD_BUF_TYPE);
-    if (off == NULL)
-        return 0;
+    // if (!prepend_path(&path, string_p, CWD_BUF_TYPE))
+    // {
+    //     return 0;
+    // }
 
-    bpf_probe_read_str(&context->cwd, CWD_LEN, (void *)&string_p->buf[*off]);
+    // u32 *off = get_buffer_offset(CWD_BUF_TYPE);
+    // if (off == NULL)
+    //     return 0;
+
+    // bpf_probe_read_str(&context->cwd, CWD_LEN, (void *)&string_p->buf[*off]);
 
     return 0;
 }
@@ -1988,11 +2001,7 @@ int kretprobe__inet_csk_accept(struct pt_regs *ctx)
     int sk_lingertime_offset = offsetof(struct sock, sk_lingertime);
 
     if (sk_lingertime_offset - gso_max_segs_offset == 2)
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 6, 0)
-        protocol = READ_KERN(newsk->sk_protocol);
-#else
         protocol = newsk->sk_protocol;
-#endif
     else if (sk_lingertime_offset - gso_max_segs_offset == 4)
     // 4.10+ with little endian
 #if __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
