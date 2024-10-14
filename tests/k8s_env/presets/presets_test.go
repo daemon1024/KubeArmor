@@ -1,7 +1,11 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2022 Authors of KubeArmor
+
 package presets
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/kubearmor/KubeArmor/protobuf"
@@ -50,6 +54,9 @@ var _ = Describe("Presets", func() {
 
 	Describe("Policy Apply", func() {
 		It("can audit fileless execution", func() {
+			if !strings.Contains(K8sRuntimeEnforcer(), "bpf") {
+				Skip("fileless execution preset requires bpf-lsm")
+			}
 			// Apply policy
 			err := K8sApplyFile("res/ksp-preset-audit-fileless.yaml")
 			Expect(err).To(BeNil())
@@ -80,6 +87,9 @@ var _ = Describe("Presets", func() {
 		})
 
 		It("can block fileless execution", func() {
+			if !strings.Contains(K8sRuntimeEnforcer(), "bpf") {
+				Skip("fileless execution preset requires bpf-lsm")
+			}
 			// Apply policy
 			err := K8sApplyFile("res/ksp-preset-block-fileless.yaml")
 			Expect(err).To(BeNil())
